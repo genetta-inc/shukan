@@ -362,30 +362,30 @@ export function HabitCard({
               </div>
             )}
 
-            {/* Impact Badge */}
-            {habit.evidences.length > 0 && (
-              <ImpactBadge evidences={habit.evidences} mode="daily" />
-            )}
-
-            {/* Streak card */}
-            <div className="rounded-lg bg-success/15 p-3">
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-success">
-                  {habit.currentStreak}
-                </span>
-                <span className="text-sm text-success/70">
-                  {tStats('days')}
-                </span>
-                <span className="ml-auto text-xs text-success/60">
-                  {t('streakGoal', { percent: streakPercent })}
-                </span>
-              </div>
-              {/* Progress bar */}
-              <div className="mt-2 h-1.5 rounded-full bg-white">
-                <div
-                  className="h-full rounded-full bg-success transition-all duration-300"
-                  style={{ width: `${streakPercent}%` }}
-                />
+            {/* Impact + Streak (one borderless box) */}
+            <div className="rounded-xl bg-success/10 p-3 space-y-3">
+              {habit.evidences.length > 0 && (
+                <ImpactBadge evidences={habit.evidences} mode="daily" plain />
+              )}
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-success">
+                    {habit.currentStreak}
+                  </span>
+                  <span className="text-sm text-success/70">
+                    {tStats('days')}
+                  </span>
+                  <span className="ml-auto text-xs text-success/60">
+                    {t('streakGoal', { percent: streakPercent })}
+                  </span>
+                </div>
+                {/* Progress bar */}
+                <div className="mt-2 h-1.5 rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full bg-success transition-all duration-300"
+                    style={{ width: `${streakPercent}%` }}
+                  />
+                </div>
               </div>
             </div>
 
@@ -402,7 +402,7 @@ export function HabitCard({
                   e.stopPropagation();
                   onOpenDetail(habit.id);
                 }}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-success px-4 py-2.5 text-sm font-medium text-success-foreground transition-colors hover:bg-success/90"
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
               >
                 <Maximize2 className="size-4" />
                 {t('detail')}
@@ -416,8 +416,8 @@ export function HabitCard({
                 className={cn(
                   'flex shrink-0 items-center justify-center gap-1 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
                   isSkipped
-                    ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
-                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    ? 'bg-amber-200 text-amber-800 hover:bg-amber-300 dark:bg-amber-900/50 dark:text-amber-300 dark:hover:bg-amber-900/70'
+                    : 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
                 )}
               >
                 {isSkipped ? (

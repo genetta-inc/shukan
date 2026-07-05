@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import { HeartPulse, Wallet, TrendingUp } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { calculateDailyImpact, calculateAnnualImpact, formatHealthMinutes, formatCurrency, type DailyImpact } from '@/lib/impact';
 import { getArticle } from '@/data/impact-articles';
 import type { HabitEvidence, LifeImpactArticle } from '@/types/impact';
@@ -11,6 +12,7 @@ interface ImpactBadgeFromArticleProps {
   mode?: 'daily' | 'annual';
   useMan?: boolean;
   onTap?: () => void;
+  plain?: boolean;
 }
 
 interface ImpactBadgeFromEvidencesProps {
@@ -18,6 +20,7 @@ interface ImpactBadgeFromEvidencesProps {
   mode?: 'daily' | 'annual';
   useMan?: boolean;
   onTap?: () => void;
+  plain?: boolean;
 }
 
 interface ImpactBadgeFromValuesProps {
@@ -25,6 +28,7 @@ interface ImpactBadgeFromValuesProps {
   mode?: 'daily' | 'annual';
   useMan?: boolean;
   onTap?: () => void;
+  plain?: boolean;
 }
 
 type ImpactBadgeProps =
@@ -74,7 +78,11 @@ export function ImpactBadge(props: ImpactBadgeProps) {
   return (
     <Wrapper
       {...wrapperProps}
-      className="flex w-full items-center justify-between rounded-xl border border-success/20 bg-success/5 px-3.5 py-3 text-left"
+      className={cn(
+        'flex w-full items-center justify-between text-left',
+        // plain: 親側のボックスに埋め込む用（枠・背景を持たない）
+        props.plain ? '' : 'rounded-xl border border-success/20 bg-success/5 px-3.5 py-3',
+      )}
     >
       <div className="flex flex-col items-center gap-0.5">
         <HeartPulse className="size-4 text-success" />
