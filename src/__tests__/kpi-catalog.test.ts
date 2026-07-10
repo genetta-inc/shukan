@@ -4,7 +4,7 @@ import type { KpiKey } from '@/data/kpi/catalog';
 import { HABIT_PRESETS, getPresetsForKpi } from '@/data/habit-presets';
 import { getLifeExpectancy, LIFE_EXPECTANCY_TABLE } from '@/data/life-expectancy';
 import { getAverageIncome, AVERAGE_INCOME_TABLE } from '@/data/average-income';
-import { isValidArticleId } from '@/types/impact';
+import { isValidArticleId } from '@/data/impact-articles';
 
 /**
  * A-S9: KPI定義カタログ4件（確定文言）

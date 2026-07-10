@@ -1,6 +1,6 @@
 import type { Habit, HabitInsertInput, HabitCompletion, CopingStep, UrgeLog, DailyReflection } from '@/types/habit';
 import type { HabitEvidence } from '@/types/impact';
-import { isValidArticleId } from '@/types/impact';
+import { isValidArticleId } from '@/data/impact-articles';
 import { createClient } from './client';
 
 export interface HabitRow {

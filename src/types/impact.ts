@@ -1,88 +1,9 @@
-// 有効な記事IDの型安全な定義
-export type ArticleId =
-  | 'quit_smoking'
-  | 'quit_porn'
-  | 'quit_alcohol'
-  | 'quit_sugar'
-  | 'quit_junk_food'
-  | 'quit_social_media'
-  | 'daily_cardio'
-  | 'daily_strength'
-  | 'daily_walking'
-  | 'daily_stretching'
-  | 'daily_yoga'
-  | 'daily_meditation'
-  | 'daily_journaling'
-  | 'daily_reading'
-  | 'daily_saving'
-  | 'morning_planning'
-  | 'no_youtube'
-  | 'no_screens_before_bed'
-  | 'no_impulse_buying'
-  | 'cold_shower'
-  | 'sleep_7hours'
-  | 'wake_early'
-  | 'gratitude_practice'
-  | 'drink_water'
-  | 'eat_vegetables'
-  | 'intermittent_fasting'
-  | 'home_cooking'
-  | 'deep_work'
-  | 'learn_language'
-  | 'time_in_nature'
-  | 'morning_tidying'
-  | 'daily_habit_review'
-  | 'schedule_adherence'
-  | 'pomodoro_technique'
-  | 'movement_breaks'
-  | 'social_connection'
-  | 'morning_light'
-  | 'fermented_food';
-
-const VALID_ARTICLE_IDS: readonly string[] = [
-  'quit_smoking',
-  'quit_porn',
-  'quit_alcohol',
-  'quit_sugar',
-  'quit_junk_food',
-  'quit_social_media',
-  'daily_cardio',
-  'daily_strength',
-  'daily_walking',
-  'daily_stretching',
-  'daily_yoga',
-  'daily_meditation',
-  'daily_journaling',
-  'daily_reading',
-  'daily_saving',
-  'morning_planning',
-  'no_youtube',
-  'no_screens_before_bed',
-  'no_impulse_buying',
-  'cold_shower',
-  'sleep_7hours',
-  'wake_early',
-  'gratitude_practice',
-  'drink_water',
-  'eat_vegetables',
-  'intermittent_fasting',
-  'home_cooking',
-  'deep_work',
-  'learn_language',
-  'time_in_nature',
-  'morning_tidying',
-  'daily_habit_review',
-  'schedule_adherence',
-  'pomodoro_technique',
-  'movement_breaks',
-  'social_connection',
-  'morning_light',
-  'fermented_food',
-] as const;
-
-export function isValidArticleId(id: string | null | undefined): id is ArticleId {
-  return typeof id === 'string' && VALID_ARTICLE_IDS.includes(id);
-}
+// 記事IDの型は記事レジストリ（src/data/impact-articles/index.ts のマップ）から導出する。
+// 記事を追加/削除しても、このファイルや VALID_ARTICLE_IDS を手で編集する必要はない。
+// 実行時ヘルパー（VALID_ARTICLE_IDS / isValidArticleId）は循環参照を避けるため
+// レジストリ側にあり、`@/data/impact-articles` から import する。
+import type { ArticleId } from '@/data/impact-articles';
+export type { ArticleId };
 
 // 計算ロジックのステップ（1つの計算過程を表す）
 export interface CalcStep {
@@ -92,10 +13,26 @@ export interface CalcStep {
   result?: string;    // 結果（例: "288分/日"）
 }
 
+// 記事のヒーロー画像（Discover カード・エビデンスシート・ホームのコラージュ背景で共有）。
+// url は Unsplash のサイズ指定クエリ（?w=..&h=..）を含まない「ベースURL」。
+// 呼び出し側（evidence-hero-images.ts のヘルパー）が用途ごとにサイズを付与する。
+// gradient は画像が読めない/未設定のときのフォールバック用 Tailwind グラデーション。
+export interface HeroImage {
+  /** Unsplash ベースURL（サイズクエリなし。例: https://images.unsplash.com/photo-xxxx） */
+  url: string;
+  /** フォールバック用グラデーション（例: 'from-gray-400 to-gray-600'） */
+  gradient: string;
+}
+
 // 記事データ（静的、ビルド時バンドル）
 export interface LifeImpactArticle {
-  habitCategory: ArticleId;
+  // レジストリのキーと一致させる（実行時整合は validate-evidence がチェック）。
+  // ArticleId をここで参照するとレジストリ定義と循環するため string にしている。
+  habitCategory: string;
   habitName: string;
+
+  // ヒーロー画像（任意）。未設定の記事は各コンポーネント側の既定グラデーションにフォールバックする。
+  heroImage?: HeroImage;
 
   // 固定レイヤー: 普遍的な研究結果（全ユーザー共通）
   article: {
