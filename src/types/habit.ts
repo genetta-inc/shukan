@@ -25,6 +25,11 @@ export interface Habit {
   status: 'active' | 'established';
   /** established の習慣が身についた開始日（YYYY-MM-DD）。active では undefined。 */
   establishedSince?: string;
+  /**
+   * エビデンス未紐付けの習慣について「エビデンスを追加してほしい」リクエストを送信した日時
+   * （ISO 文字列）。未送信なら undefined（issue #90）。habit_id 単位で冪等なので高々1件。
+   */
+  evidenceRequestedAt?: string;
 }
 
 /**

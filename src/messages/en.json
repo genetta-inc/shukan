@@ -253,7 +253,11 @@
     "feedbackThanks": "Thank you for your feedback",
     "feedbackHealth": "Healthy lifespan Calculation",
     "feedbackCost": "Cost saving Calculation",
-    "feedbackIncome": "Income Growth Calculation"
+    "feedbackIncome": "Income Growth Calculation",
+    "requestEvidence": "Request evidence for this habit",
+    "requestEvidenceSubmitting": "Submitting...",
+    "requestEvidenceSubmitted": "Request submitted",
+    "requestEvidenceError": "Failed to submit. Please try again."
   },
   "reviewHistory": {
     "title": "Review History",

@@ -21,6 +21,7 @@ import {
   updateHabitEvidenceWeight,
   replaceHabitEvidences,
   updateCompletionNote,
+  insertEvidenceRequest,
 } from '@/lib/supabase/habits';
 
 /** Server Component（(app)/page.tsx）で prefetch した初期データ（issue #59）。 */
@@ -244,6 +245,23 @@ export function useHabits(initialData?: InitialHabitData | null) {
     []
   );
 
+  /**
+   * エビデンス未紐付けの習慣に「エビデンスを追加してほしい」リクエストを送信する（issue #90）。
+   * habit_id 単位で冪等なので、既に送信済みでも安全に呼べる（サーバ側で何もしない）。
+   */
+  const requestEvidence = useCallback(
+    async (habitId: string, habitName: string) => {
+      if (!user) return;
+      const { createdAt } = await insertEvidenceRequest(habitId, user.id, habitName);
+      setHabits((prev) =>
+        prev.map((h) =>
+          h.id === habitId ? { ...h, evidenceRequestedAt: h.evidenceRequestedAt ?? createdAt } : h
+        )
+      );
+    },
+    [user]
+  );
+
   const updateNote = useCallback(
     async (habitId: string, date: string, note: string) => {
       try {
@@ -303,6 +321,7 @@ export function useHabits(initialData?: InitialHabitData | null) {
     addEvidence,
     removeEvidence,
     setEvidenceWeight,
+    requestEvidence,
     updateNote,
   };
 }

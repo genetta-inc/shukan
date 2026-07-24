@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
-import { Rocket, X, Pencil, ChevronRight, ChevronLeft, Settings, Crown, HeartPulse, Wallet, TrendingUp, Smile } from 'lucide-react';
+import { Rocket, X, Pencil, ChevronRight, ChevronLeft, Settings, Crown, HeartPulse, Wallet, TrendingUp, Smile, FileQuestion, Check } from 'lucide-react';
 import { HabitIcon } from '@/components/ui/habit-icon';
 import {
   Dialog,
@@ -41,6 +41,8 @@ interface HabitDetailModalProps {
   onAddEvidence?: (habitId: string, articleId: string, weight?: number) => void;
   onRemoveEvidence?: (habitId: string, evidenceId: string) => void;
   onSetWeight?: (habitId: string, evidenceId: string, weight: number) => void;
+  /** エビデンス未紐付けの習慣に「追加してほしい」リクエストを送る（issue #90） */
+  onRequestEvidence?: (habitId: string, habitName: string) => Promise<void>;
 }
 
 function getDayOfWeekMondayBased(dateStr: string): number {
@@ -113,6 +115,7 @@ export function HabitDetailModal({
   onAddEvidence,
   onRemoveEvidence,
   onSetWeight,
+  onRequestEvidence,
 }: HabitDetailModalProps) {
   const t = useTranslations('stats');
   const tHabits = useTranslations('habits');
@@ -121,6 +124,21 @@ export function HabitDetailModal({
   const tImpact = useTranslations('impact');
   const [rocketConfirmDate, setRocketConfirmDate] = useState<string | null>(null);
   const [evidenceManagerOpen, setEvidenceManagerOpen] = useState(false);
+  const [requestingEvidence, setRequestingEvidence] = useState(false);
+  const [requestEvidenceError, setRequestEvidenceError] = useState(false);
+
+  const handleRequestEvidence = useCallback(async () => {
+    if (!habit || !onRequestEvidence || requestingEvidence) return;
+    setRequestingEvidence(true);
+    setRequestEvidenceError(false);
+    try {
+      await onRequestEvidence(habit.id, habit.name);
+    } catch {
+      setRequestEvidenceError(true);
+    } finally {
+      setRequestingEvidence(false);
+    }
+  }, [habit, onRequestEvidence, requestingEvidence]);
 
   // History month navigation (single state to avoid stale closures)
   const now = new Date();
@@ -387,6 +405,38 @@ export function HabitDetailModal({
                 <Settings className="size-4" />
                 {tEvidence('manage')}
               </button>
+            )}
+          </div>
+        )}
+
+        {/* Evidence Request（エビデンス未紐付けの習慣向け・issue #90） */}
+        {habit.evidences.length === 0 && onRequestEvidence && (
+          <div className="px-5">
+            {habit.evidenceRequestedAt ? (
+              <div
+                role="status"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-secondary/50 px-3.5 py-2.5 text-sm font-medium text-muted-foreground"
+              >
+                <Check className="size-4" />
+                {tEvidence('requestEvidenceSubmitted')}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <button
+                  type="button"
+                  onClick={handleRequestEvidence}
+                  disabled={requestingEvidence}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-secondary/50 px-3.5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:bg-secondary hover:text-foreground disabled:opacity-60"
+                >
+                  <FileQuestion className="size-4" />
+                  {requestingEvidence ? tEvidence('requestEvidenceSubmitting') : tEvidence('requestEvidence')}
+                </button>
+                {requestEvidenceError && (
+                  <p role="alert" className="text-center text-xs text-destructive">
+                    {tEvidence('requestEvidenceError')}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}

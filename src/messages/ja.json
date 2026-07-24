@@ -253,7 +253,11 @@
     "feedbackThanks": "フィードバックありがとうございます",
     "feedbackHealth": "健康寿命の算出根拠",
     "feedbackCost": "出費削減の算出根拠",
-    "feedbackIncome": "増える収入の算出根拠"
+    "feedbackIncome": "増える収入の算出根拠",
+    "requestEvidence": "この習慣のエビデンスを追加してほしい",
+    "requestEvidenceSubmitting": "送信中...",
+    "requestEvidenceSubmitted": "リクエスト済み",
+    "requestEvidenceError": "リクエストに失敗しました。もう一度お試しください"
   },
   "reviewHistory": {
     "title": "振り返り履歴",
