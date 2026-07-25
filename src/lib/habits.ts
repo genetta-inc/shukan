@@ -326,6 +326,38 @@ export function isEstablishedHabit(habit: Habit): boolean {
 }
 
 /**
+ * 連続30日到達時の「卒業」提案（issue #91）の閾値。ちょうど30日連続達成した翌チェック時に
+ * 一度だけ提案する（AC#1）。
+ */
+export const GRADUATION_STREAK_THRESHOLD = 30;
+
+/**
+ * 連続日数が卒業提案の閾値に「ちょうど到達した瞬間」を検知する純関数。
+ * prev が undefined（初回レンダー・スナップショット無し）なら false を返す
+ * （src/lib/pwa/completion.ts の isCompletionTransition と同じ設計）。
+ * 既に閾値以上だった状態からの続伸（例: 30→31）では false になるため、
+ * 呼び出し側で prev/next のスナップショットを render 間で保持している限り
+ * 同一の遷移で重複発火しない（AC#1 の「重複しない」はこの関数＋呼び出し側の
+ * セッション内ガードの組み合わせで担保する）。
+ */
+export function hasJustReachedGraduationThreshold(
+  prevStreak: number | undefined,
+  nextStreak: number,
+  threshold: number = GRADUATION_STREAK_THRESHOLD
+): boolean {
+  if (prevStreak === undefined) return false;
+  return prevStreak < threshold && nextStreak >= threshold;
+}
+
+/**
+ * 習慣が卒業提案の対象になり得るか。
+ * 既に established（AC適用済み） / archived / 「まだ続ける」を選択済み（AC#3）の習慣は対象外。
+ */
+export function isGraduationCandidate(habit: Habit): boolean {
+  return habit.status === 'active' && !habit.archived && !habit.graduationDeclinedAt;
+}
+
+/**
  * 過去日の編集可能枠（今日を除く過去N日）。issue #107 で 4日→6日に拡大。
  * 今日を含めて計7日間＝1週間となり、週次習慣（週N回）の時間単位と揃う。
  * 「通常編集できる枠」「未記録日を自動失敗として表示する境界」「ロケット救済の対象境界」の

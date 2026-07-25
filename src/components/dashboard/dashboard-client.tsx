@@ -13,10 +13,19 @@ import { DailyImpactSummary } from '@/components/habits/daily-impact-summary';
 import { EstablishedSection } from '@/components/habits/established-section';
 import { YesterdayReviewBanner } from '@/components/habits/yesterday-review-banner';
 import { YesterdayReviewSheet } from '@/components/habits/yesterday-review-sheet';
+import { GraduationProposalSheet } from '@/components/habits/graduation-proposal-sheet';
 import { HelpButton } from '@/components/help/help-button';
 import { useHabits, type InitialHabitData } from '@/hooks/useHabits';
 import { useProfile } from '@/hooks/useProfile';
-import { getHabitsWithStats, getTodayString, getYesterdayUnreviewedHabits, isDailyTrackedHabit, isEstablishedHabit } from '@/lib/habits';
+import {
+  getHabitsWithStats,
+  getTodayString,
+  getYesterdayUnreviewedHabits,
+  isDailyTrackedHabit,
+  isEstablishedHabit,
+  hasJustReachedGraduationThreshold,
+  isGraduationCandidate,
+} from '@/lib/habits';
 import { getArticle } from '@/data/impact-articles';
 import { useAuth } from '@/components/auth-provider';
 import { useSubscription } from '@/hooks/useSubscription';
@@ -112,6 +121,60 @@ export function DashboardClient({
     }
     prevStatusMapRef.current = nextMap;
   }, [todayHabits]);
+
+  // --- Graduation proposal (issue #91) -----------------------------------
+  // 連続日数が30に「ちょうど到達した瞬間」（29→30 の遷移）を検知し、卒業提案シートを開く。
+  // PWA install banner のスナップショット比較（prevStatusMapRef/isCompletionTransition）と同じ
+  // render間差分パターンを currentStreak に対して使う。
+  // proposedGraduationIdsRef はセッション内で「一度提案した habitId」を記録し、
+  // 同一遷移の連打・再レンダーで同じ習慣に対して二重にシートを開かない（AC#1）。
+  const prevStreakMapRef = useRef<Map<string, number> | null>(null);
+  const proposedGraduationIdsRef = useRef<Set<string>>(new Set());
+  const [graduationHabitId, setGraduationHabitId] = useState<string | null>(null);
+  const [graduationStreakAtProposal, setGraduationStreakAtProposal] = useState(0);
+
+  useEffect(() => {
+    const nextMap = new Map<string, number>();
+    for (const h of todayHabits) {
+      nextMap.set(h.id, h.currentStreak ?? 0);
+    }
+    const prevMap = prevStreakMapRef.current;
+    if (prevMap) {
+      for (const h of todayHabits) {
+        if (!isGraduationCandidate(h)) continue;
+        if (proposedGraduationIdsRef.current.has(h.id)) continue;
+        const prev = prevMap.get(h.id);
+        const next = nextMap.get(h.id) ?? 0;
+        if (hasJustReachedGraduationThreshold(prev, next)) {
+          proposedGraduationIdsRef.current.add(h.id);
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the PWA banner transition-detector above
+          setGraduationHabitId(h.id);
+          setGraduationStreakAtProposal(next);
+          break;
+        }
+      }
+    }
+    prevStreakMapRef.current = nextMap;
+  }, [todayHabits]);
+
+  const graduationHabit = useMemo(
+    () => todayHabits.find((h) => h.id === graduationHabitId) ?? null,
+    [todayHabits, graduationHabitId]
+  );
+
+  const handleGraduationAccept = useCallback(() => {
+    if (graduationHabitId) {
+      updateHabit(graduationHabitId, { status: 'established', establishedSince: getTodayString() });
+    }
+    setGraduationHabitId(null);
+  }, [graduationHabitId, updateHabit]);
+
+  const handleGraduationDecline = useCallback(() => {
+    if (graduationHabitId) {
+      updateHabit(graduationHabitId, { graduationDeclinedAt: new Date().toISOString() });
+    }
+    setGraduationHabitId(null);
+  }, [graduationHabitId, updateHabit]);
 
   // Compute yesterday's date client-side only to avoid SSR timezone mismatch
   // (Vercel SSR runs in UTC, but user is in JST — causes 1-day offset between 00:00-08:59 JST)
@@ -454,6 +517,15 @@ export function DashboardClient({
         onDayStatusChange={setDayStatus}
         onNoteChange={updateNote}
         onSaveReflection={handleSaveReflection}
+      />
+
+      <GraduationProposalSheet
+        open={!!graduationHabitId}
+        onOpenChange={(open) => !open && setGraduationHabitId(null)}
+        habit={graduationHabit}
+        currentStreak={graduationStreakAtProposal}
+        onAccept={handleGraduationAccept}
+        onDecline={handleGraduationDecline}
       />
 
       {/* PWA install banner: non-modal, pinned above the BottomNav (h-16).

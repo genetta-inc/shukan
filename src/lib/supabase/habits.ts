@@ -21,6 +21,7 @@ export interface HabitRow {
   sort_order: number;
   status: 'active' | 'established';
   established_since: string | null;
+  graduation_declined_at: string | null;
 }
 
 /** insert 用の snake_case 行型（id/created_at/archived は DB 割り当て）。 */
@@ -98,6 +99,7 @@ export function toHabit(row: HabitRow, evidenceRows?: HabitEvidenceRow[]): Habit
     // コンシューマに undefined を漏らさない。
     status: (row.status as 'active' | 'established') ?? 'active',
     establishedSince: row.established_since ?? undefined,
+    graduationDeclinedAt: row.graduation_declined_at ?? undefined,
   };
 }
 
@@ -229,6 +231,7 @@ export async function updateHabitById(
   if (updates.impactArticleId !== undefined) row.impact_article_id = updates.impactArticleId ?? null;
   if (updates.status !== undefined) row.status = updates.status;
   if (updates.establishedSince !== undefined) row.established_since = updates.establishedSince || null;
+  if (updates.graduationDeclinedAt !== undefined) row.graduation_declined_at = updates.graduationDeclinedAt || null;
 
   const { error } = await supabase.from('habits').update(row).eq('id', id);
   if (error) throw error;
