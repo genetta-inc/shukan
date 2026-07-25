@@ -1,10 +1,20 @@
 /**
- * 初回チュートリアル（コーチマーク）の純ロジック（issue 未起票・プロトタイプ）。
+ * 初回チュートリアル（コーチマーク）の純ロジック。
  *
  * オンボーディング完了直後に一度だけ、実 UI の上にスポットライトを重ねて
  * 「タップで達成 → 再タップで取り消し → 長押し → 発見タブ → 追加/自作」の
- * 操作を実際に触りながら案内する。表示制御は localStorage（クライアント完結）。
- * DOM 依存の描画は components/tutorial/tutorial-overlay.tsx が担当する。
+ * 操作を実際に触りながら案内する。
+ *
+ * 表示制御は DB（user_profiles.tutorial_completed_at）を正とする（issue #117）。
+ * localStorage はネットワーク往復を省くための高速パスキャッシュにすぎない:
+ *   - 'done'          : DB 同期済みで完了確定。以後 DB 参照すら不要（高速パス）。
+ *   - 'done-unsynced' : この端末では完了したが DB への書き込みが未確認/失敗。
+ *                       次回の DB 参照時に再送を試みる。
+ *   - 'pending'       : オンボ完了直後、まだ完走もスキップもしていない。
+ *   - null            : 上記いずれでもない（このアプリで一度もオンボ完了していない等）。
+ *
+ * 起動可否そのものの決定は resolveAutoStart()（純関数・DOM 非依存）が担い、
+ * localStorage の読み書き・DB 呼び出しは components/tutorial/tutorial-overlay.tsx が行う。
  */
 
 export const TUTORIAL_STORAGE_KEY = 'smitch-tutorial';
@@ -119,19 +129,87 @@ function writeStorage(value: string) {
   }
 }
 
-/** オンボーディング完了時に呼ぶ。次にホームを開いたときチュートリアルが始まる。 */
+export type LocalTutorialState = 'pending' | 'done' | 'done-unsynced' | null;
+
+/** オンボーディング完了時に呼ぶ。次にホームを開いたとき DB 判定でチュートリアルが始まりうる状態にする。 */
 export function markTutorialPending() {
   if (typeof window === 'undefined') return;
   writeStorage('pending');
 }
 
-export function isTutorialPending(): boolean {
-  if (typeof window === 'undefined') return false;
-  return readStorage() === 'pending';
+/** localStorage キャッシュの現在状態を読む（SSR/読み出し失敗時は null）。 */
+export function readLocalTutorialState(): LocalTutorialState {
+  if (typeof window === 'undefined') return null;
+  const raw = readStorage();
+  if (raw === 'pending' || raw === 'done' || raw === 'done-unsynced') return raw;
+  return null;
 }
 
-/** 完走・スキップの両方で呼ぶ。以後は自動表示しない。 */
-export function markTutorialDone() {
+/**
+ * DB 参照すら不要な高速パスか（= この端末で完了が確定済み）。
+ * true の間は resolveAutoStart / DB フェッチを呼ぶ必要がない。
+ */
+export function isLocalTutorialDoneFastPath(): boolean {
+  return readLocalTutorialState() === 'done';
+}
+
+/**
+ * 完走・スキップ時に呼ぶ。以後は自動表示しない。
+ * @param dbSynced DB への tutorial_completed_at 書き込みが成功したか。
+ *   失敗時は 'done-unsynced' にして次回 DB 参照時の再送対象にする（次回リトライ）。
+ */
+export function markTutorialDone(dbSynced: boolean) {
+  if (typeof window === 'undefined') return;
+  writeStorage(dbSynced ? 'done' : 'done-unsynced');
+}
+
+/** DB 同期の再送に成功したときに呼ぶ。ローカルキャッシュを確定 done へ昇格する。 */
+export function markLocalTutorialSynced() {
   if (typeof window === 'undefined') return;
   writeStorage('done');
+}
+
+// --- 起動判定（DB を正、localStorage を高速パスキャッシュとして使う。issue #117） ---
+
+export interface TutorialAutoStartDecision {
+  /** チュートリアルを起動するか */
+  start: boolean;
+  /** DB へ tutorial_completed_at の書き込み（前回失敗分の再送）を試みるべきか */
+  shouldSyncDb: boolean;
+  /** ローカルキャッシュを 'done' に更新すべきか（DB 完了済みが判明し高速パス化できる場合） */
+  cacheAsDone: boolean;
+}
+
+/**
+ * `?tutorial=1` 以外のケースで、ローカルキャッシュと DB 取得結果から起動可否を決める純関数。
+ * DOM/ネットワークに触れないため vitest（node環境）でそのまま検証できる。
+ *
+ * 呼び出し側の前提: `localState === 'done'` のときはこの関数を呼ぶ前に
+ * isLocalTutorialDoneFastPath() で判定を終え、DB フェッチ自体を省略していること。
+ */
+export function resolveAutoStart(params: {
+  localState: LocalTutorialState;
+  /** DB 参照に失敗した場合は 'error'。成功時は tutorial_completed_at の値（NULL=未完了）。 */
+  dbLookup: { tutorialCompletedAt: string | null } | 'error';
+}): TutorialAutoStartDecision {
+  const { localState, dbLookup } = params;
+
+  if (dbLookup === 'error') {
+    // DB 未参照時は従来どおりローカルの pending 判定にのみフォールバックする。
+    // done-unsynced はこの端末では完了済みなので、DB 到達不能でも再起動しない。
+    return { start: localState === 'pending', shouldSyncDb: false, cacheAsDone: false };
+  }
+
+  if (dbLookup.tutorialCompletedAt !== null) {
+    // DB 上は完了済み（他端末で完走 or 既存ユーザーのバックフィル）。
+    return { start: false, shouldSyncDb: false, cacheAsDone: localState !== 'done' };
+  }
+
+  // DB 上は未完了。
+  if (localState === 'done-unsynced') {
+    // この端末では既に完了しているが前回の DB 書き込みが未確認 → 再送を試み、
+    // 起動はしない（この端末のユーザーは既にチュートリアルを見ている）。
+    return { start: false, shouldSyncDb: true, cacheAsDone: false };
+  }
+  return { start: true, shouldSyncDb: false, cacheAsDone: false };
 }

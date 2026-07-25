@@ -8,13 +8,17 @@ import { cn } from '@/lib/utils';
 import {
   TUTORIAL_EVENT_NAME,
   TUTORIAL_STEPS,
-  isTutorialPending,
+  isLocalTutorialDoneFastPath,
+  markLocalTutorialSynced,
   markTutorialDone,
   markTutorialPending,
   progressOf,
+  readLocalTutorialState,
+  resolveAutoStart,
   stepIndexById,
   type TutorialEventType,
 } from '@/lib/tutorial';
+import { fetchUserProfile, markTutorialCompleted } from '@/lib/supabase/profiles';
 
 /**
  * 初回チュートリアルのコーチマーク描画（プロトタイプ）。
@@ -68,23 +72,81 @@ export function TutorialOverlay() {
     setMounted(true);
   }, []);
 
-  // --- 起動判定: オンボーディング完了フラグ、または ?tutorial=1（動作確認用の再実行） ---
+  // --- 起動判定: DB（user_profiles.tutorial_completed_at）を正、localStorage を高速パス
+  // キャッシュとする（issue #117）。?tutorial=1 は現状維持（DB を書き換えない強制再実行）。
   useEffect(() => {
-    const force = new URLSearchParams(window.location.search).get('tutorial') === '1';
-    if (!force && !isTutorialPending()) return;
-    if (force) markTutorialPending();
-    // 画面が落ち着いてから開始（オンボ直後の遷移アニメと被せない）
-    const timer = setTimeout(() => {
-      setStepIndex(0);
-      setPhase('running');
-    }, 600);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const startAfterSettle = () => {
+      // 画面が落ち着いてから開始（オンボ直後の遷移アニメと被せない）
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        setStepIndex(0);
+        setPhase('running');
+      }, 600);
+    };
+
+    async function decide() {
+      const force = new URLSearchParams(window.location.search).get('tutorial') === '1';
+      if (force) {
+        markTutorialPending();
+        startAfterSettle();
+        return;
+      }
+
+      // 高速パス: この端末で完了確定済みなら DB を参照するまでもない
+      if (isLocalTutorialDoneFastPath()) return;
+
+      const localState = readLocalTutorialState();
+      let dbLookup: Parameters<typeof resolveAutoStart>[0]['dbLookup'];
+      try {
+        const profile = await fetchUserProfile();
+        // (app)/layout.tsx の resolveAppRedirect が profile 存在を保証しているため、
+        // null は取得タイミングのレースのみ。安全側に倒し DB 未参照（'error'）扱いにする。
+        dbLookup = profile ? { tutorialCompletedAt: profile.tutorialCompletedAt } : 'error';
+      } catch {
+        dbLookup = 'error';
+      }
+      if (cancelled) return;
+
+      const decision = resolveAutoStart({ localState, dbLookup });
+      if (decision.cacheAsDone) markLocalTutorialSynced();
+      if (decision.shouldSyncDb) {
+        markTutorialCompleted()
+          .then(() => {
+            if (!cancelled) markLocalTutorialSynced();
+          })
+          .catch(() => {
+            // 次回 DB 参照時に再送される（'done-unsynced' のまま維持）
+          });
+      }
+      if (decision.start) startAfterSettle();
+    }
+
+    decide();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  // 完走・スキップ共通の完了処理: 即座にローカル確定（'done-unsynced'）し、DB 書き込みが
+  // 確認できたら 'done' へ昇格する。書き込み失敗時は 'done-unsynced' のまま残り、次回
+  // DB 参照時（resolveAutoStart の shouldSyncDb）に再送される。
+  const completeTutorial = useCallback(() => {
+    markTutorialDone(false);
+    markTutorialCompleted()
+      .then(markLocalTutorialSynced)
+      .catch(() => {
+        // 次回リトライに任せる
+      });
   }, []);
 
   const finish = useCallback(() => {
-    markTutorialDone();
+    completeTutorial();
     setPhase('finished');
-  }, []);
+  }, [completeTutorial]);
 
   const advanceFrom = useCallback(
     (index: number) => {
@@ -98,9 +160,9 @@ export function TutorialOverlay() {
   );
 
   const skip = useCallback(() => {
-    markTutorialDone();
+    completeTutorial();
     setPhase('idle');
-  }, []);
+  }, [completeTutorial]);
 
   // --- 実操作イベントで進める ---
   useEffect(() => {

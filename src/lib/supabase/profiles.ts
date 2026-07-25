@@ -15,6 +15,8 @@ export interface UserProfileRow {
   tracked_kpis: string[];
   created_at: string;
   updated_at: string;
+  /** 初回チュートリアルの完了時刻。NULL = 未完了（issue #117） */
+  tutorial_completed_at: string | null;
 }
 
 /** camelCase のドメイン型（D7: 利用が限定的なためライブラリに同居） */
@@ -28,6 +30,7 @@ export interface UserProfile {
   trackedKpis: string[];
   createdAt: string;
   updatedAt: string;
+  tutorialCompletedAt: string | null;
 }
 
 /** upsert の入力（書き込み対象の入力値のみ。派生値は保存しない） */
@@ -52,6 +55,7 @@ export function toUserProfile(row: UserProfileRow): UserProfile {
     trackedKpis: row.tracked_kpis ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    tutorialCompletedAt: row.tutorial_completed_at,
   };
 }
 
@@ -98,4 +102,26 @@ export async function upsertUserProfile(
     .single();
   if (error) throw error;
   return toUserProfile(data as UserProfileRow);
+}
+
+/**
+ * 初回チュートリアル（コーチマーク）の完走・スキップ時に呼ぶ（issue #117）。
+ * `tutorial_completed_at` を now() で更新する。以後は DB 判定で自動起動しない。
+ *
+ * カラム単位の update（onboarding-guard.ts の hasUserProfile と同様、現在セッションの
+ * ユーザーIDを自前で取得して対象行を絞る）。行が存在しない場合（未オンボーディング）は
+ * 呼び出し側の前提が崩れているため、その旨をエラーとして投げる（握り潰さない）。
+ */
+export async function markTutorialCompleted(): Promise<void> {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error('markTutorialCompleted: no authenticated user');
+
+  const { error } = await supabase
+    .from('user_profiles')
+    .update({ tutorial_completed_at: new Date().toISOString() })
+    .eq('user_id', user.id);
+  if (error) throw error;
 }
