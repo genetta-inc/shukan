@@ -25,6 +25,12 @@ export interface Habit {
   status: 'active' | 'established';
   /** established の習慣が身についた開始日（YYYY-MM-DD）。active では undefined。 */
   establishedSince?: string;
+  /**
+   * 連続30日到達時の「卒業」提案（issue #91）で「まだ続ける」を選んだ日時（ISO）。
+   * 値が入っていれば以後この習慣には二度と提案しない。「卒業する」を選んだ場合は
+   * status='established' に遷移するためこのフィールドは使わない。未辞退では undefined。
+   */
+  graduationDeclinedAt?: string;
 }
 
 /**
