@@ -3,7 +3,7 @@
  * TDD tests for the review history feature
  * Tests: MOOD_ICONS, Supabase CRUD helpers, calendar utils, useReviewHistory hook logic
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // ─── 1. MOOD_ICONS ────────────────────────────────────────────────────────────
 

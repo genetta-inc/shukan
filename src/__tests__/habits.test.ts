@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   calculateStreak,
   getCompletionRate,
@@ -49,19 +49,6 @@ function makeHabit(overrides: Partial<Habit> & { id: string }): Habit {
     status: 'active',
     ...overrides,
   };
-}
-
-function makeDates(start: string, count: number): string[] {
-  const dates: string[] = [];
-  const d = new Date(start);
-  for (let i = 0; i < count; i++) {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    dates.push(`${year}-${month}-${day}`);
-    d.setDate(d.getDate() + 1);
-  }
-  return dates;
 }
 
 function getDateString(date: Date): string {
@@ -644,7 +631,6 @@ describe('getRecentDays - skip support', () => {
   });
 
   it('should return none when day has no completion record', () => {
-    const today = new Date();
     const result = getRecentDays('h1', [], 3);
     expect(result).toHaveLength(3);
     result.forEach(day => {
@@ -679,6 +665,7 @@ describe('getRecentDays - skip support', () => {
     const result = getRecentDays('h1', [], 5);
     expect(result).toHaveLength(5);
     // 最初が今日、以降は過去に向かう
+    expect(result[0].date).toBe(getDateString(today));
     for (let i = 1; i < result.length; i++) {
       expect(result[i].date < result[i - 1].date).toBe(true);
     }

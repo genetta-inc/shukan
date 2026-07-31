@@ -11,7 +11,7 @@ import {
   formatHealthMinutes,
   formatCurrency,
 } from '@/lib/impact';
-import type { HabitEvidence, LifeImpactArticle, LifeImpactSavings } from '@/types/impact';
+import type { HabitEvidence, LifeImpactArticle } from '@/types/impact';
 import type { HabitCompletion, HabitWithStats } from '@/types/habit';
 
 // --- Test Fixtures ---
