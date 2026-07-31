@@ -36,7 +36,7 @@ const DISCOVER_KPIS: {
 
 export default function DiscoverPage() {
   const t = useTranslations();
-  const { addHabit } = useHabits();
+  const { habits, completions, addHabit } = useHabits();
   const [selectedArticleId, setSelectedArticleId] = useState<ArticleId | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [prefilledEvidences, setPrefilledEvidences] = useState<{ articleId: string; weight: number }[]>([]);
@@ -187,6 +187,8 @@ export default function DiscoverPage() {
         articleId={selectedArticleId}
         showAddButton
         onAddHabit={handleAddFromArticle}
+        habits={habits}
+        completions={completions}
       />
 
       <HabitForm

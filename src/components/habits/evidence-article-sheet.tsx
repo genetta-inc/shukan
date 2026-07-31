@@ -2,7 +2,20 @@
 
 import { useMemo, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { ArrowLeft, HeartPulse, Wallet, TrendingUp, Smile, ChevronDown, ThumbsDown, Send } from 'lucide-react';
+import {
+  ArrowLeft,
+  HeartPulse,
+  Wallet,
+  TrendingUp,
+  Smile,
+  ChevronDown,
+  ThumbsDown,
+  Send,
+  ArrowUp,
+  ArrowDown,
+  Check,
+  AlertTriangle,
+} from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -15,8 +28,18 @@ import { EstimateDisclaimer } from '@/components/habits/estimate-disclaimer';
 import { getEvidenceHeroImage, getEvidenceHeroGradient, HERO_SIZE_SHEET } from '@/data/evidence-hero-images';
 import { renderArticle, calculateAnnualImpact, formatHealthMinutes, formatCurrency } from '@/lib/impact';
 import type { ArticleId, CalcStep } from '@/types/impact';
+import type { Habit, HabitCompletion } from '@/types/habit';
 import { submitBadMark, removeBadMark, submitComment, getUserFeedback } from '@/lib/supabase/feedbacks';
+import { submitVerdict, getUserVerdict } from '@/lib/supabase/verdicts';
+import { ARTICLE_VERDICTS, findVoterStreakForArticle, type ArticleVerdict } from '@/lib/verdicts';
 import { useAuth } from '@/components/auth-provider';
+
+const VERDICT_ICONS: Record<ArticleVerdict, typeof ArrowUp> = {
+  too_high: ArrowUp,
+  too_low: ArrowDown,
+  fair: Check,
+  incorrect: AlertTriangle,
+};
 
 /** Convert **bold** markers in text to <strong> elements */
 function parseBold(text: string): ReactNode[] {
@@ -36,6 +59,13 @@ interface EvidenceArticleSheetProps {
   articleId: string | null;
   showAddButton?: boolean;
   onAddHabit?: (articleId: string) => void;
+  /**
+   * 構造化投票（issue #89）で「投票者の該当習慣の継続日数」を算出するために使う。
+   * 呼び出し元に habits/completions が無い文脈（Discover 初回訪問等）では省略でき、
+   * その場合 voter_streak_days は 0 として保存される。
+   */
+  habits?: Habit[];
+  completions?: HabitCompletion[];
 }
 
 /** Renders a single CalcStep row */
@@ -64,6 +94,8 @@ export function EvidenceArticleSheet({
   articleId,
   showAddButton = false,
   onAddHabit,
+  habits = [],
+  completions = [],
 }: EvidenceArticleSheetProps) {
   const t = useTranslations('impact');
   const tEvidence = useTranslations('evidence');
@@ -89,13 +121,20 @@ export function EvidenceArticleSheet({
   const [commentSending, setCommentSending] = useState(false);
   const [showThanks, setShowThanks] = useState(false);
 
+  // Structured verdict state (issue #89)
+  const [verdict, setVerdict] = useState<ArticleVerdict | null>(null);
+  const [verdictSubmitting, setVerdictSubmitting] = useState(false);
+  const [showVerdictThanks, setShowVerdictThanks] = useState(false);
+
   // Load feedback state when sheet opens (SCENARIO-AF-09)
   useEffect(() => {
     if (!open || !articleId || !user) return;
     setCalcExpanded(false);
     setCommentText('');
     setShowThanks(false);
+    setShowVerdictThanks(false);
     getUserFeedback(user.id, articleId).then(({ hasBadMark: has }) => setHasBadMark(has));
+    getUserVerdict(user.id, articleId).then(({ verdict: v }) => setVerdict(v));
   }, [open, articleId, user]);
 
   // Bad mark toggle (SCENARIO-AF-01, AF-02, AF-08)
@@ -133,6 +172,29 @@ export function EvidenceArticleSheet({
       setCommentSending(false);
     }
   }, [articleId, user, commentText, commentSending]);
+
+  // Structured verdict select (issue #89): 1ユーザー1記事1票、変更可（upsert）。
+  // 投票時点の該当習慣の継続日数を voter_streak_days としてスナップショット保存する。
+  const handleVerdictSelect = useCallback(
+    async (next: ArticleVerdict) => {
+      if (!articleId || !user || verdictSubmitting || verdict === next) return;
+      const prev = verdict;
+      setVerdict(next); // optimistic
+      setVerdictSubmitting(true);
+      try {
+        const voterStreakDays = findVoterStreakForArticle(habits, completions, articleId);
+        await submitVerdict(user.id, articleId, next, voterStreakDays);
+        setShowVerdictThanks(true);
+        setTimeout(() => setShowVerdictThanks(false), 3000);
+      } catch (err) {
+        console.error('Verdict submit failed:', err);
+        setVerdict(prev); // rollback
+      } finally {
+        setVerdictSubmitting(false);
+      }
+    },
+    [articleId, user, verdict, verdictSubmitting, habits, completions]
+  );
 
   if (!article || !articleId) {
     return (
@@ -350,6 +412,44 @@ export function EvidenceArticleSheet({
                 )}
               </div>
             )}
+
+            {/* Structured verdict section (issue #89): 4択投票、1ユーザー1記事1票・変更可 */}
+            <div className="mt-4 border-t pt-4">
+              <p className="text-xs text-muted-foreground">
+                {tEvidence('verdictQuestion')}
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {ARTICLE_VERDICTS.map((v) => {
+                  const Icon = VERDICT_ICONS[v];
+                  const selected = verdict === v;
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => handleVerdictSelect(v)}
+                      disabled={verdictSubmitting}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50',
+                        selected
+                          ? 'border-primary bg-primary/5 text-primary ring-2 ring-primary/30'
+                          : 'border-border bg-card text-foreground hover:border-primary/40'
+                      )}
+                    >
+                      <Icon className="size-3.5" />
+                      {tEvidence(`verdict.${v}`)}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Thank you toast */}
+              {showVerdictThanks && (
+                <p className="mt-2 text-xs font-medium text-success">
+                  {tEvidence('verdictThanks')}
+                </p>
+              )}
+            </div>
 
             {/* Feedback section — REQ-AF-04, AF-06 */}
             <div className="mt-4 border-t pt-4 pb-4">

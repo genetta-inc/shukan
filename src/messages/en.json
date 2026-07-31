@@ -253,7 +253,15 @@
     "feedbackThanks": "Thank you for your feedback",
     "feedbackHealth": "Healthy lifespan Calculation",
     "feedbackCost": "Cost saving Calculation",
-    "feedbackIncome": "Income Growth Calculation"
+    "feedbackIncome": "Income Growth Calculation",
+    "verdictQuestion": "Does this number match your experience?",
+    "verdictThanks": "Thanks for voting",
+    "verdict": {
+      "too_high": "Too high",
+      "too_low": "Too low",
+      "fair": "Seems fair",
+      "incorrect": "There's an error"
+    }
   },
   "reviewHistory": {
     "title": "Review History",

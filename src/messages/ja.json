@@ -253,7 +253,15 @@
     "feedbackThanks": "フィードバックありがとうございます",
     "feedbackHealth": "健康寿命の算出根拠",
     "feedbackCost": "出費削減の算出根拠",
-    "feedbackIncome": "増える収入の算出根拠"
+    "feedbackIncome": "増える収入の算出根拠",
+    "verdictQuestion": "この数値、実感と合っていますか？",
+    "verdictThanks": "投票ありがとうございます",
+    "verdict": {
+      "too_high": "効果が大きすぎる",
+      "too_low": "効果が小さすぎる",
+      "fair": "妥当だと思う",
+      "incorrect": "間違いがある"
+    }
   },
   "reviewHistory": {
     "title": "振り返り履歴",

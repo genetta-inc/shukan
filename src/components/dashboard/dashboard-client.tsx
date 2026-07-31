@@ -443,6 +443,8 @@ export function DashboardClient({
         open={!!openArticleId}
         onOpenChange={(open) => !open && setOpenArticleId(null)}
         articleId={openArticleId}
+        habits={habits}
+        completions={completions}
       />
 
       <YesterdayReviewSheet
