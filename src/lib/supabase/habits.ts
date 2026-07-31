@@ -69,6 +69,14 @@ interface HabitEvidenceRow {
   created_at: string;
 }
 
+interface EvidenceRequestRow {
+  id: string;
+  habit_id: string;
+  user_id: string;
+  habit_name: string;
+  created_at: string;
+}
+
 function toHabitEvidence(row: HabitEvidenceRow): HabitEvidence {
   return {
     id: row.id,
@@ -78,7 +86,13 @@ function toHabitEvidence(row: HabitEvidenceRow): HabitEvidence {
   };
 }
 
-export function toHabit(row: HabitRow, evidenceRows?: HabitEvidenceRow[]): Habit {
+export function toHabit(
+  row: HabitRow,
+  evidenceRows?: HabitEvidenceRow[],
+  // PostgREST は evidence_requests.habit_id の UNIQUE 制約から 1:1 関係と推論し、
+  // 埋め込み結果を配列ではなく単一オブジェクト（無ければ null）で返す（habit_evidences とは形が違う）。
+  evidenceRequestRow?: EvidenceRequestRow | null
+): Habit {
   return {
     id: row.id,
     name: row.name,
@@ -98,6 +112,7 @@ export function toHabit(row: HabitRow, evidenceRows?: HabitEvidenceRow[]): Habit
     // コンシューマに undefined を漏らさない。
     status: (row.status as 'active' | 'established') ?? 'active',
     establishedSince: row.established_since ?? undefined,
+    evidenceRequestedAt: evidenceRequestRow?.created_at ?? undefined,
   };
 }
 
@@ -159,13 +174,17 @@ export async function fetchHabits(client?: SupabaseClient): Promise<Habit[]> {
   const supabase = client ?? createClient();
   const { data, error } = await supabase
     .from('habits')
-    .select('*, habit_evidences(*)')
+    .select('*, habit_evidences(*), evidence_requests(*)')
     .order('sort_order', { ascending: true });
 
   if (error) throw error;
-  return (data as (HabitRow & { habit_evidences: HabitEvidenceRow[] })[]).map(
-    (row) => toHabit(row, row.habit_evidences ?? [])
-  );
+  return (
+    data as (HabitRow & {
+      habit_evidences: HabitEvidenceRow[];
+      // evidence_requests.habit_id が UNIQUE のため PostgREST は単一オブジェクト（無ければ null）で返す。
+      evidence_requests: EvidenceRequestRow | null;
+    })[]
+  ).map((row) => toHabit(row, row.habit_evidences ?? [], row.evidence_requests));
 }
 
 /** completions を直近 `days` 日分取得する。`client` の扱いは fetchHabits と同じ。 */
@@ -413,6 +432,33 @@ export async function replaceHabitEvidences(
     .select();
   if (error) throw error;
   return (data as HabitEvidenceRow[]).map(toHabitEvidence);
+}
+
+// --- Evidence Requests ---
+
+/**
+ * エビデンス未紐付けの習慣に対する「エビデンスを追加してほしい」リクエストを送信する（issue #90）。
+ * habit_id 単位で冪等: unique(habit_id) 制約 + ignoreDuplicates で、二重送信は
+ * エラーにせず「何もしない」（= 既存リクエストを保つ）。呼び出し側は結果を「送信済み」として扱ってよい。
+ */
+export async function insertEvidenceRequest(
+  habitId: string,
+  userId: string,
+  habitName: string
+): Promise<{ createdAt: string }> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('evidence_requests')
+    .upsert(
+      { habit_id: habitId, user_id: userId, habit_name: habitName },
+      { onConflict: 'habit_id', ignoreDuplicates: true }
+    )
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  // ignoreDuplicates: true で conflict（既に送信済み）した場合は data が null で返る
+  // （on conflict do nothing なので新規行は無い）。それでも呼び出し側には成功として返す。
+  return { createdAt: (data as EvidenceRequestRow | null)?.created_at ?? new Date().toISOString() };
 }
 
 // --- Sort Order ---

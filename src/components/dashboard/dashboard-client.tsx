@@ -55,6 +55,7 @@ export function DashboardClient({
     addEvidence,
     removeEvidence,
     setEvidenceWeight,
+    requestEvidence,
     updateNote,
   } = useHabits(initialData);
   const [formOpen, setFormOpen] = useState(false);
@@ -405,6 +406,7 @@ export function DashboardClient({
         onAddEvidence={addEvidence}
         onRemoveEvidence={removeEvidence}
         onSetWeight={setEvidenceWeight}
+        onRequestEvidence={requestEvidence}
       />
 
       <HabitActionSheet
