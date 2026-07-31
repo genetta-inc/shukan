@@ -16,6 +16,7 @@ function makeRow(overrides: Partial<UserProfileRow> = {}): UserProfileRow {
     tracked_kpis: ['cost_saving'],
     created_at: '2026-06-12T00:00:00.000Z',
     updated_at: '2026-06-12T00:00:00.000Z',
+    tutorial_completed_at: null,
     ...overrides,
   };
 }
@@ -33,6 +34,7 @@ describe('toUserProfile', () => {
       trackedKpis: ['cost_saving'],
       createdAt: '2026-06-12T00:00:00.000Z',
       updatedAt: '2026-06-12T00:00:00.000Z',
+      tutorialCompletedAt: null,
     });
   });
 
@@ -62,5 +64,16 @@ describe('toUserProfile', () => {
     for (const g of ['male', 'female', 'other', 'unspecified'] as const) {
       expect(toUserProfile(makeRow({ gender: g })).gender).toBe(g);
     }
+  });
+
+  // issue #117: 初回チュートリアルの表示制御を DB 正にするためのカラム
+  it('tutorial_completed_at が null のとき tutorialCompletedAt は null になる', () => {
+    const profile = toUserProfile(makeRow({ tutorial_completed_at: null }));
+    expect(profile.tutorialCompletedAt).toBeNull();
+  });
+
+  it('tutorial_completed_at の値をそのまま tutorialCompletedAt に渡す', () => {
+    const profile = toUserProfile(makeRow({ tutorial_completed_at: '2026-07-25T10:00:00.000Z' }));
+    expect(profile.tutorialCompletedAt).toBe('2026-07-25T10:00:00.000Z');
   });
 });

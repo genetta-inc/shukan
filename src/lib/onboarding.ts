@@ -290,6 +290,7 @@ export function profileInputToUserProfile(input: OnboardingProfileInput): UserPr
     trackedKpis: [],
     createdAt: '',
     updatedAt: '',
+    tutorialCompletedAt: null,
   };
 }
 
