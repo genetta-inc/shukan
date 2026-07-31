@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { cn } from '@/lib/utils';
 import { getArticle } from '@/data/impact-articles';
 import { calculateAnnualImpact, formatHealthMinutes, formatCurrency } from '@/lib/impact';
 import { HabitIcon } from '@/components/ui/habit-icon';

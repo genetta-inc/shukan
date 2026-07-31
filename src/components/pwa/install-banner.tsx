@@ -43,7 +43,6 @@ export function InstallBanner({ justCompleted, onDismiss }: InstallBannerProps) 
     // Lazy useState init would run during SSR and cause a hydration mismatch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPlatform(detectPlatform(ua, !!isStandalone));
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDismissedAt(readDismissedAt(window.localStorage));
   }, []);
 
