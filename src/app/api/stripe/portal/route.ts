@@ -10,7 +10,7 @@ import { createPortalSession } from '@/lib/billing/provider';
  * management / cancellation. Users without a billing profile get a clear 400
  * rather than an unhandled error.
  */
-export async function POST(_request: Request): Promise<Response> {
+export async function POST(): Promise<Response> {
   const supabase = await createClient();
   const {
     data: { user },

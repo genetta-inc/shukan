@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { Check, ChevronDown, ChevronUp, Maximize2, GripVertical, SkipForward, Undo2, Images, History } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
@@ -201,7 +201,6 @@ export function HabitCard({
   const t = useTranslations('habits');
   const tDays = useTranslations('days');
   const tStats = useTranslations('stats');
-  const isQuit = habit.type === 'quit';
   const isSkipped = habit.skippedToday;
   const today = getTodayString();
   const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;

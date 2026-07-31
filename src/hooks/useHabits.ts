@@ -127,7 +127,8 @@ export function useHabits(initialData?: InitialHabitData | null) {
         track('habit_updated', { habit_id: id });
       }
       // Exclude evidences from optimistic update — evidences are managed via dedicated CRUD
-      const { evidences: _ignored, ...safeUpdates } = updates;
+      const safeUpdates = { ...updates };
+      delete safeUpdates.evidences;
       setHabits((prev) =>
         prev.map((h) => (h.id === id ? { ...h, ...safeUpdates } : h))
       );

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { CalcStep, LifeImpactArticle } from '@/types/impact';
+import type { CalcStep } from '@/types/impact';
 import { getArticle, getArticleList } from '@/data/impact-articles';
 import type { ArticleId } from '@/types/impact';
 
@@ -104,6 +104,17 @@ describe('Cumulative text consistency', () => {
       expect(monthlyHealthMinutes).toBeGreaterThanOrEqual(0);
       expect(monthlyCost).toBeGreaterThanOrEqual(0);
       expect(monthlyIncome).toBeGreaterThanOrEqual(0);
+
+      // 月 → 年 → 10年 は単調非減少（負の daily 値が紛れ込むとここで壊れる）
+      expect(yearlyHealthMinutes).toBeGreaterThanOrEqual(monthlyHealthMinutes);
+      expect(decadeHealthMinutes).toBeGreaterThanOrEqual(yearlyHealthMinutes);
+      expect(yearlyCost).toBeGreaterThanOrEqual(monthlyCost);
+      expect(decadeCost).toBeGreaterThanOrEqual(yearlyCost);
+      expect(yearlyIncome).toBeGreaterThanOrEqual(monthlyIncome);
+      expect(decadeIncome).toBeGreaterThanOrEqual(yearlyIncome);
+
+      // 累積効果の文章は全記事必須（renderArticle の {{cumulative}} 置換に使う）
+      expect(cumulative.length).toBeGreaterThan(0);
     }
   });
 });
@@ -123,6 +134,10 @@ describe('quit_smoking post-fix cumulative', () => {
     // It should be recalculated based on: 8年 × 525,600 ÷ 40年 ÷ 365日
     expect(dailyHealthMinutes).not.toBe(12);
     expect(dailyHealthMinutes).toBeGreaterThan(100); // Should be ~288
+
+    // 禁煙は金銭・収入インパクトも正（記事の cost / income 推論段落が前提にしている）
+    expect(dailyCostSaving).toBeGreaterThan(0);
+    expect(dailyIncomeGain).toBeGreaterThan(0);
 
     // Verify cumulative text references correct scale
     const cumulative = article!.inferences.cumulative;

@@ -374,7 +374,6 @@ export function OnboardingWizard() {
             </h1>
 
             <HabitImpactBox
-              presetId={currentPreset.id}
               profileResult={habitPotentialV3(currentPreset.id, calcProfile)}
               t={t}
               onTap={
@@ -776,12 +775,10 @@ function useCountUpKpis(target: DiagnosisV3Result): ShownKpis {
 // ───────── 個別インパクトボックス（達成率100%・未来分の4KPI） ─────────
 
 function HabitImpactBox({
-  presetId,
   profileResult,
   t,
   onTap,
 }: {
-  presetId: string;
   profileResult: DiagnosisV3Result;
   t: ReturnType<typeof useTranslations>;
   /** 推定値から算出根拠（エビデンス記事）へ 1 タップで到達する導線（issue #39） */

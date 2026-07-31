@@ -61,19 +61,6 @@ function getDateString(date: Date): string {
 }
 
 /**
- * Returns a Date object for the most recent occurrence of the given weekday.
- * dayOfWeek: 0=Sun, 1=Mon, ..., 6=Sat
- * If today is the requested day, returns today.
- */
-function getDateForWeekday(dayOfWeek: number): Date {
-  const today = new Date();
-  const diff = (today.getDay() - dayOfWeek + 7) % 7;
-  const result = new Date(today);
-  result.setDate(result.getDate() - diff);
-  return result;
-}
-
-/**
  * Returns a Date object for a day N weeks ago at the given weekday.
  * weeksAgo=0 → this week, weeksAgo=1 → last week, etc.
  * dayOfWeek: 1=Mon, ..., 7=Sun (ISO 8601: week starts Monday)
