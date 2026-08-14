@@ -21,8 +21,12 @@ export function useProfile() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // onAuthStateChange は同一ユーザーでも毎回新しい user オブジェクト参照を返すため、
+  // 参照ではなくプリミティブな user.id を effect の依存にする（#79 / useHabits と同じパターン）。
+  const userId = user?.id;
+
   useEffect(() => {
-    if (!user) {
+    if (!userId) {
       setProfile(null);
       setLoading(false);
       return;
@@ -48,7 +52,7 @@ export function useProfile() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [userId]);
 
   const save = useCallback(
     async (input: UserProfileInput): Promise<UserProfile | null> => {

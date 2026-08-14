@@ -18,8 +18,15 @@ export function useReviewHistory() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // onAuthStateChange は同一ユーザーでも毎回新しい user オブジェクト参照を返すため、
+  // 参照ではなくプリミティブな user.id を effect の依存にする（#79 / useHabits と同じパターン）。
+  const userId = user?.id;
+
   useEffect(() => {
-    if (!user) return;
+    if (!userId) return;
+    // ガードで narrowing 済みの string をローカルに束縛する
+    // （hoisting される function 宣言内には narrowing が伝播しないため）。
+    const uid = userId;
 
     let cancelled = false;
 
@@ -28,8 +35,8 @@ export function useReviewHistory() {
       setError(null);
       try {
         const [refs, comps] = await Promise.all([
-          getMonthlyReflections(user!.id, displayYear, displayMonth),
-          getMonthlyCompletions(user!.id, displayYear, displayMonth),
+          getMonthlyReflections(uid, displayYear, displayMonth),
+          getMonthlyCompletions(uid, displayYear, displayMonth),
         ]);
         if (!cancelled) {
           setReflections(refs);
@@ -51,7 +58,7 @@ export function useReviewHistory() {
     return () => {
       cancelled = true;
     };
-  }, [user, displayYear, displayMonth]);
+  }, [userId, displayYear, displayMonth]);
 
   const navigateMonth = useCallback((delta: number) => {
     setSelectedDate(null);

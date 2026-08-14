@@ -23,11 +23,14 @@ export function useSubscription(): UseSubscriptionResult {
   const [subscription, setSubscription] = useState<SubscriptionRecord | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // onAuthStateChange は同一ユーザーでも毎回新しい user オブジェクト参照を返すため、
+  // 参照ではなくプリミティブな user.id を effect の依存にする（#79 / useHabits と同じパターン）。
+  const userId = user?.id;
+
   useEffect(() => {
     let cancelled = false;
     if (authLoading) return;
 
-    const userId = user?.id;
     const load = userId
       ? getSubscriptionForUser(userId).catch(() => null)
       : Promise.resolve(null);
@@ -41,7 +44,7 @@ export function useSubscription(): UseSubscriptionResult {
     return () => {
       cancelled = true;
     };
-  }, [user, authLoading]);
+  }, [userId, authLoading]);
 
   return {
     subscription,
