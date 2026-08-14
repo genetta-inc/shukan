@@ -50,6 +50,35 @@ export function dedupeEvidences<T extends EvidenceRef>(evidences: readonly T[]):
   return dedupeByArticleId(evidences, (e) => e.weight);
 }
 
+/** 記事IDから refines 親（詳細化元の記事ID）を引く関数。親を持たない記事は undefined。 */
+export type GetRefines = (articleId: string) => string | undefined;
+
+/**
+ * 系統 de-dup（issue #92: refines 関係による同系統重複排除）。
+ * エビデンス集合内に refines チェーンで結ばれた「祖先–子孫」が両方存在する場合、
+ * 詳細側（子孫）だけを計上し、粗い側（祖先）を落とす。詳細記事のほうがユーザーの
+ * 実態に近い効果値を持つため。兄弟（同じ親を refines する記事同士）は別の実活動なので
+ * 両方残す。articleId 単位の de-dup（#34: dedupeEvidences）の後段に適用すること。
+ * refines の循環は validate-evidence が error で弾く前提だが、無限ループしないよう防御している。
+ */
+export function dedupeByLineage<T extends { articleId: HabitEvidence['articleId'] }>(
+  items: readonly T[],
+  getRefines: GetRefines
+): T[] {
+  // 集合内のいずれかの記事の（真の）祖先に当たる articleId を集める。
+  const ancestorsOfPresent = new Set<string>();
+  for (const item of items) {
+    const visited = new Set<string>([item.articleId]);
+    let parent = getRefines(item.articleId);
+    while (parent !== undefined && !visited.has(parent)) {
+      visited.add(parent);
+      ancestorsOfPresent.add(parent);
+      parent = getRefines(parent);
+    }
+  }
+  return items.filter((item) => !ancestorsOfPresent.has(item.articleId));
+}
+
 /**
  * 日次インパクトを年間に変換
  */
@@ -86,8 +115,9 @@ export function calculateDailyImpact(
 }
 
 /**
- * 複数習慣ぶんの evidences を横断して日次インパクトを計算する（issue #34）。
- * 同一 articleId を複数習慣が参照していても1回だけ（最大ウェイト採用）計上する。
+ * 複数習慣ぶんの evidences を横断して日次インパクトを計算する（issue #34 / #92）。
+ * ① 同一 articleId は1回だけ（最大ウェイト採用）計上する（#34）。
+ * ② refines チェーンの祖先–子孫が両方あれば詳細側（子孫）だけを計上する（#92）。
  * ホーム集計（DailyImpactSummary 等）の習慣横断合算はこちらを使うこと。
  */
 export function calculateDedupedDailyImpact(
@@ -96,7 +126,11 @@ export function calculateDedupedDailyImpact(
 ): DailyImpact {
   const flattened: EvidenceRef[] = [];
   for (const group of evidenceGroups) flattened.push(...group);
-  return calculateDailyImpact(dedupeEvidences(flattened), getArticleFn);
+  const byArticle = dedupeEvidences(flattened);
+  const byLineage = dedupeByLineage(byArticle, (id) =>
+    getArticleFn(id as HabitEvidence['articleId'])?.refines
+  );
+  return calculateDailyImpact(byLineage, getArticleFn);
 }
 
 /**
