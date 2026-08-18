@@ -1,0 +1,374 @@
+# ─────────────────────────────────────────────────────────────
+# auto-merge.yml — 条件を機械判定してマージするロボット
+# （dev-workflow プラグイン templates/auto-merge/ から展開。差し替え箇所は README.md 参照。
+#   正本の出自: genetta-inc の flatmate リポで実運用検証済みの実装）
+#
+# 人間のマージ操作は実質ボタン押しであり、そこに正しさは足されていない。代わりに
+# **決定論的に判定できる条件だけ**をこのロボットが機械判定してマージする:
+#
+#   1. PR に `agent-review:passed` ラベル（レビューループ通過）
+#   2. ci.yml の必須チェックが green（下の REQUIRED_CHECKS で名前指定）
+#   3. 聖域パスに一切触れていない（パスベース判定。機械判定に委ねない）
+#   4. リポ変数 AUTOMERGE_PAUSED が未設定（＝緊急停止されていない）
+#
+# 設計上の要点（変更前に必ず読むこと）:
+#
+# - **聖域はこのファイル自身を含む**。判定ルールをエージェントが書き換えて main に
+#   入れる経路を封鎖するのが聖域の最重要の役割なので、`.github/workflows/` は常に
+#   human-merge にする（自己参照的な保護。このファイルの変更は必ず人間がマージする）。
+# - **branch protection は使わない／使えない**。GitHub Free の private リポジトリでは
+#   branch protection が使えないため、CI green の判定は必須チェックの「名前指定」で
+#   本ワークフローが自前検証する。ci.yml のジョブ名を変えたら REQUIRED_CHECKS も直すこと
+#   （名前が一致しないと「green にならない」＝マージされない fail-closed 側に倒れる。
+#   両者の一致は scripts/test-auto-merge-workflow.sh が CI で検証する）。
+# - **素の `pull_request` トリガーは絶対に足さない**（2026-08-03 アドバーサリアルレビューで
+#   critical 指摘）。GitHub Actions の `pull_request` イベントは**PR の head ブランチ側の
+#   ワークフロー定義**で実行される。つまり auto-merge.yml を書き換えた PR が、その改変版の
+#   自分自身を実行できてしまい、聖域判定を消したりマージ条件を緩めた版が「自分をマージ」できる
+#   ＝自己参照的な保護が根本から破れる。
+# - **`pull_request_target`（labeled のみ）は例外として許す**（レビュー合格 → 即マージの
+#   即応経路。主の運用意図「レビューが通ったらその場でマージ」を満たす）。
+#   `pull_request_target` は GitHub 仕様で**常に base（main）側の workflow 定義**で
+#   実行されるため、head 側の改変版が動く経路にはならず、自己参照防御は保たれる。
+#   target 固有のリスク（write 権限トークン・シークレット付きで走ること）が実害になるのは
+#   「PR head のコードを checkout / 実行した場合」だけであり、本ワークフローは checkout を
+#   一切行わず gh API の読み取り判定のみで完結するため構造的に該当しない。
+#   **つまり target の安全性は「このワークフローが PR head を checkout しない」という
+#   不変条件の上に成立している**。checkout を足した瞬間に target は危険になるため、
+#   この不変条件（actions/checkout 等の不在）は scripts/test-auto-merge-workflow.sh が
+#   静的 assert で固定している（破ると CI が落ちる）。
+#   結果、トリガーは pull_request_target(labeled) / workflow_run / schedule /
+#   workflow_dispatch の4系で、**すべて既定ブランチ（main）側の定義で実行される**。
+# - **マージだけは secrets.AUTOMERGE_PAT で行う**。GITHUB_TOKEN でマージした push は
+#   後続ワークフローを起動しないため（GitHub の再帰防止仕様）。参照・ラベル・コメントは
+#   GITHUB_TOKEN。PAT 未設定なら何もマージせずログに残して終了する（fail-closed）。
+# - **マージは検証した HEAD SHA にピンする**（REST の PUT /pulls/{n}/merge に sha を渡す）。
+#   ラベル・CI・聖域を検証してから実際にマージするまでの間に新しいコミットが push されると、
+#   検証していないコードがマージされる（TOCTOU）。sha を渡せば head が動いていた場合は
+#   409 で失敗し、何もマージされない。次回の workflow_run / schedule で新しい head を
+#   最初から検証し直す流れになる。
+# - 手動実行（workflow_dispatch）に dry_run 入力がある。PAT 発行前でも判定ログだけ出せる。
+#
+# 運用（停止方法・PAT 発行手順・revert 手順）の正本: docs/auto-merge.md
+# ─────────────────────────────────────────────────────────────
+name: Auto Merge
+
+# トリガーは「既定ブランチ側の定義で実行されるもの」だけ（上のヘッダ参照）。
+# 素の pull_request を足すと head ブランチ側の改変版が実行されるため絶対に足さない。
+on:
+  # レビュー合格ラベルが付いた瞬間に、その PR だけを即判定する（主経路）。
+  # pull_request_target は base（main）側の定義で実行されるため自己参照防御を破らない。
+  # ただしこの安全性は「本ワークフローが PR head を checkout しない限りにおいて」成立し、
+  # その不変条件は scripts/test-auto-merge-workflow.sh が静的 assert で固定している。
+  # types は labeled のみ（synchronize 等を足さない。押し広げはテストで検知される）。
+  pull_request_target:
+    types: [labeled]
+  # ラベル付与時点で CI が未 green だった PR を、CI 完了時に拾う（バックストップ）
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  # 両イベントをすり抜けた PR の最終救済（日次で十分）
+  schedule:
+    - cron: "23 20 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "判定ログだけ出してマージしない（PAT 未設定でも実行可）"
+        type: boolean
+        default: false
+      pr:
+        description: "この PR 番号だけを対象にする（空なら全 open PR）"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: auto-merge
+  cancel-in-progress: false
+
+jobs:
+  merge-eligible:
+    name: merge eligible PRs
+    # labeled 即応は「合格ラベルが付いた」ときだけ走らせる（他ラベルの付与では回さない。
+    # 式コンテキスト内の比較でありシェルへは渡らない。仮にすり抜けても本体スクリプトは
+    # ラベル・CI・聖域を全部検証し直すので、この if は節約であって防御線ではない）
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'agent-review:passed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge eligible PRs
+        env:
+          # 参照系・ラベル・コメントは GITHUB_TOKEN。マージだけ PAT
+          GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
+          REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          AUTOMERGE_PAUSED: ${{ vars.AUTOMERGE_PAUSED }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ONLY_PR: ${{ inputs.pr }}
+          # labeled 即応（pull_request_target）用。PR 番号は GitHub が採番する数値で
+          # attacker が任意文字列を入れられるフィールドではないが、env 経由＋シェル側の
+          # 数値形式検査で防御を一段残す（title / body / branch 名は一切展開しない）
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # >>> automerge-script（scripts/test-auto-merge-workflow.sh がこの範囲を抽出して検査する）
+          set -euo pipefail
+
+          DRY_RUN="${DRY_RUN:-false}"
+          ONLY_PR="${ONLY_PR:-}"
+          AUTOMERGE_PAUSED="${AUTOMERGE_PAUSED:-}"
+          MERGE_TOKEN="${MERGE_TOKEN:-}"
+          EVENT_NAME="${EVENT_NAME:-}"
+          EVENT_PR="${EVENT_PR:-}"
+
+          # ── 層4: 緊急停止（主がスマホの GitHub UI からリポ変数を足すだけで全停止）──
+          # 「未設定＝稼働」。空でない値が入っていれば理由を問わず止める（fail-closed）。
+          if [ -n "$AUTOMERGE_PAUSED" ]; then
+            echo "::warning::AUTOMERGE_PAUSED=$AUTOMERGE_PAUSED のため auto-merge は全停止中です（解除はリポ変数の削除。docs/auto-merge.md）"
+            exit 0
+          fi
+
+          # ── PAT 未設定は fail-closed（黙って GITHUB_TOKEN で代替しない）──
+          if [ -z "$MERGE_TOKEN" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "::warning::secrets.AUTOMERGE_PAT が未設定のため何もマージしません（発行手順: docs/auto-merge.md）"
+            exit 0
+          fi
+
+          # ── 聖域パス（常に人間マージ）: パスベース判定。機械/LLM の意味判定に委ねない ──
+          # ディレクトリは**プレフィックス**で丸ごと聖域にする（個別ファイル名を列挙しない。
+          # 列挙式だと新規ファイル追加＝ci.yml の隣に別の workflow を置く等で素通りできる）。
+          # docs/agent-loop* は将来ディレクトリに割れても効くよう `.md` とサブディレクトリの両方を見る。
+          # 【展開時に差し替え】リポ固有の憲法 doc があればここに足す（例: `|^docs/burn-mode(\.md$|/)`）。
+          # 足したら scripts/test-auto-merge-workflow.sh の must-match リストにも同じパスを足すこと。
+          # >>> sacred-paths
+          SACRED='^\.github/workflows/|^\.claude/|(^|/)CLAUDE\.md$|^docs/agent-loop[^/]*(\.md$|/)'
+          # <<< sacred-paths
+
+          # ── ci.yml の必須チェック（ジョブ名と完全一致させること）──
+          # 【展開時に差し替え】展開先リポの ci.yml のジョブ name: と完全一致させる。
+          # ズレは scripts/test-auto-merge-workflow.sh が CI で検知する。
+          # >>> required-checks
+          REQUIRED_CHECKS='Actionlint
+          Lint & Type Check & Test'
+          # <<< required-checks
+
+          # ── マージを見送るラベル（人間に委ねる印）──
+          # needs-approval はレビューゲートスキル（dev-workflow プラグインの pr-review-gate）が
+          # 「主のリスク許容待ち」「自力で動作確認できず代行依頼中」の PR に付ける保留印。
+          # agent-review:passed と同時に付く事故（付与順の入れ違い・人間の手動付与）に対する
+          # 防波堤として、ここでも必ず見送る（合格ラベルだけを見て素通りさせない）。
+          BLOCKING_LABELS='human-merge
+          needs-human-merge
+          human-only
+          needs-approval'
+
+          # 聖域接触時に付ける human-merge ラベルは無ければ作る（付与の失敗で素通りさせない）
+          gh label create "human-merge" --repo "$REPO" \
+            --description "聖域パス（憲法・ワークフロー等）に触れるため auto-merge 対象外。人間がマージする" \
+            --color D93F0B >/dev/null 2>&1 || true
+
+          if [ -n "$ONLY_PR" ]; then
+            # 手入力は数値のみ許可（シェル/URL への持ち込み前に形式を固定する）
+            case "$ONLY_PR" in
+              ''|*[!0-9]*) echo "::error::pr 入力が PR 番号ではありません: $ONLY_PR"; exit 1 ;;
+            esac
+            TARGETS="$ONLY_PR"
+          elif [ "$EVENT_NAME" = "pull_request_target" ]; then
+            # >>> labeled-target
+            # ラベル即応: イベントの対象 PR **だけ**を判定する（全 open PR の走査は
+            # workflow_run / schedule に残す）。判定内容は他イベントと完全に同一で、
+            # 対象の絞り込みしか変えない（条件を緩める分岐にしない）。
+            case "$EVENT_PR" in
+              ''|*[!0-9]*) echo "::error::pull_request_target イベントの PR 番号が不正です: $EVENT_PR"; exit 1 ;;
+            esac
+            TARGETS="$EVENT_PR"
+            # <<< labeled-target
+          else
+            # gh pr list --label はコロン入りラベル名で 0 件を返すことがある（2026-07-12 実測）ため REST で列挙する
+            TARGETS=$(gh api "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].number')
+          fi
+
+          if [ -z "$TARGETS" ]; then
+            echo "open PR がありません"
+            exit 0
+          fi
+
+          for N in $TARGETS; do
+            echo "--- PR #$N ---"
+
+            PR_META=$(gh api "repos/$REPO/pulls/$N" --jq '[(.draft|tostring), .head.sha, .base.ref, (.merged|tostring)] | @tsv')
+            IS_DRAFT=$(printf '%s' "$PR_META" | cut -f1)
+            HEAD_SHA=$(printf '%s' "$PR_META" | cut -f2)
+            BASE_REF=$(printf '%s' "$PR_META" | cut -f3)
+            IS_MERGED=$(printf '%s' "$PR_META" | cut -f4)
+
+            if [ "$IS_MERGED" = "true" ]; then
+              echo "マージ済み: スキップ"
+              continue
+            fi
+            if [ "$IS_DRAFT" = "true" ]; then
+              echo "draft: スキップ"
+              continue
+            fi
+            # base が既定ブランチ以外（スタック PR 等）は自動マージの対象外にする。
+            # 親ブランチへのマージは main に入る内容と一致しないため、人間の判断に残す。
+            if [ "$BASE_REF" != "$BASE_BRANCH" ]; then
+              echo "base が $BASE_BRANCH ではない（$BASE_REF）: スキップ"
+              continue
+            fi
+
+            LABELS=$(gh api "repos/$REPO/issues/$N/labels" --jq '.[].name')
+
+            if ! printf '%s\n' "$LABELS" | grep -qx "agent-review:passed"; then
+              echo "agent-review:passed が無い: スキップ"
+              continue
+            fi
+
+            BLOCKED=""
+            while IFS= read -r L; do
+              L=$(printf '%s' "$L" | sed 's/^ *//')
+              [ -n "$L" ] || continue
+              if printf '%s\n' "$LABELS" | grep -qx "$L"; then
+                BLOCKED="$L"
+                break
+              fi
+            done <<EOF
+          $BLOCKING_LABELS
+          EOF
+            if [ -n "$BLOCKED" ]; then
+              echo "$BLOCKED ラベル付き（人間に委譲済み）: スキップ"
+              continue
+            fi
+
+            # ── 聖域判定（ラベルより先に「触れたか」を見る。停止変数と無関係に必ず通る経路）──
+            # **rename / delete 迂回の封鎖**: filename（変更後）だけを見ると、聖域ファイルを
+            # 非聖域パスへ rename する PR が素通りする（新パスは聖域に一致しないため）。
+            # previous_filename（rename 元）も列挙して新旧**両方**のパスに聖域判定を当てる。
+            # delete は filename が消えたパスのまま残るので filename 側で捕まる。
+            # >>> sacred-paths-jq
+            FILES_JQ='.[] | .filename, (.previous_filename // empty)'
+            # <<< sacred-paths-jq
+            DIFF_FILES=$(gh api "repos/$REPO/pulls/$N/files?per_page=100" --paginate --jq "$FILES_JQ")
+            TOUCHED_SACRED=$(printf '%s\n' "$DIFF_FILES" | grep -E "$SACRED" || true)
+            if [ -n "$TOUCHED_SACRED" ]; then
+              SACRED_LIST=$(printf '%s' "$TOUCHED_SACRED" | tr '\n' ' ')
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "[dry-run] 聖域接触のため human-merge 対象: $SACRED_LIST"
+                continue
+              fi
+              gh api "repos/$REPO/issues/$N/labels" -f "labels[]=human-merge" >/dev/null
+              gh pr comment "$N" --repo "$REPO" --body "🔒 **auto-merge 対象外（聖域パス接触）**: 憲法・判定ルール側のファイルに変更が含まれるため、人間のマージ判断が必要です（\`human-merge\` を付与）。対象: ${SACRED_LIST}（条件の一覧: docs/auto-merge.md）"
+              echo "聖域接触: human-merge を付与してスキップ（$SACRED_LIST）"
+              continue
+            fi
+
+            # ── CI green 判定 ──
+            # gh pr checks（GraphQL statusCheckRollup）は隠れ権限が多いため、checks: read だけで
+            # 完結する REST を使う。同一 SHA に複数 check suite がぶら下がる場合があるので
+            # （draft 時代の skipped run と ready 後の success run の併存等）、名前ごとに
+            # 最新 run の conclusion だけを見る。判定クエリ自体の失敗は false 扱い（fail-closed）。
+            CHECKS_JSON=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" || echo '{"check_runs":[]}')
+            ALL_GREEN=true
+            while IFS= read -r CHECK; do
+              CHECK=$(printf '%s' "$CHECK" | sed 's/^ *//')
+              [ -n "$CHECK" ] || continue
+              OK=$(printf '%s' "$CHECKS_JSON" | jq -r --arg n "$CHECK" \
+                '[.check_runs[] | select(.name == $n)] | (length > 0) and (max_by(.started_at).conclusion == "success")' 2>/dev/null || echo "false")
+              if [ "$OK" != "true" ]; then
+                echo "必須チェックが green でない: $CHECK"
+                ALL_GREEN=false
+                break
+              fi
+            done <<EOF
+          $REQUIRED_CHECKS
+          EOF
+            if [ "$ALL_GREEN" != "true" ]; then
+              echo "CI 未 green: 次のイベントで再判定"
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] PR #$N は全条件を満たしています（agent-review:passed / CI green / 聖域非接触）。実マージはしません"
+              continue
+            fi
+
+            # ── マージ直前の再確認（判定〜マージの隙に状態が変わる TOCTOU への備え）──
+            # >>> pre-merge-recheck
+            # PR の状態: base / draft / merged を取り直す。初回の base.ref チェックは PR_META を
+            # 取った1回きりなので、そのあとに base を別ブランチへ付け替えられると
+            # 「main 以外の場所へマージする」経路が残る（マージに使う PAT は repo 全体の
+            # contents:write を持つため、既定ブランチ以外への誤爆は実害が大きい）。
+            # SHA ピンは「何をマージするか」しか固定しないので、「どこへマージするか」は
+            # ここで締め直す。draft 化・既マージも同時に弾く。
+            STATE_NOW=$(gh api "repos/$REPO/pulls/$N" --jq '[(.draft|tostring), .base.ref, (.merged|tostring)] | @tsv')
+            DRAFT_NOW=$(printf '%s' "$STATE_NOW" | cut -f1)
+            BASE_REF_NOW=$(printf '%s' "$STATE_NOW" | cut -f2)
+            MERGED_NOW=$(printf '%s' "$STATE_NOW" | cut -f3)
+            if [ "$BASE_REF_NOW" != "$BASE_BRANCH" ]; then
+              echo "::warning::マージ直前に base が $BASE_BRANCH から $BASE_REF_NOW へ変わっていた: スキップ"
+              continue
+            fi
+            if [ "$DRAFT_NOW" = "true" ]; then
+              echo "マージ直前に draft へ戻されていた: スキップ"
+              continue
+            fi
+            if [ "$MERGED_NOW" = "true" ]; then
+              echo "マージ直前に既にマージ済みだった: スキップ"
+              continue
+            fi
+
+            # 緊急停止（AUTOMERGE_PAUSED）のマージ直前再取得は**意図的に置かない**。
+            # GITHUB_TOKEN の permissions キーに variables 相当が存在せず、repo variables の
+            # REST 読み取り（単一 GET も一覧も）は設計上決して成功しない（2026-08-03 実測:
+            # actions: read を付けても失敗。旧実装の 403 = run 30805787152 も同根で、
+            # フォールバックが失敗を隠していただけ）。成功しない読み取りを fail-closed で
+            # 置くと全マージが恒久停止する（run 30819256368 で実測）。
+            # したがって PAUSED の評価は run 開始時の vars 展開（ジョブ env、実証済みで動く）
+            # に一本化する。run の寿命は数秒のため、変数設定後に開始する全 run が止まれば
+            # 緊急停止として機能する。実行中 run の途中停止が必要なケースは想定しない。
+            # ここに variables API の読み取りを再導入してはならない（動かない）。
+
+            # ラベル: 合格が外された／保留ラベルが付いた直後にマージしてしまわないよう取り直す
+            LABELS_NOW=$(gh api "repos/$REPO/issues/$N/labels" --jq '.[].name')
+            if ! printf '%s\n' "$LABELS_NOW" | grep -qx "agent-review:passed"; then
+              echo "マージ直前に agent-review:passed が消えていた: スキップ"
+              continue
+            fi
+            RECHECK_BLOCKED=""
+            while IFS= read -r L; do
+              L=$(printf '%s' "$L" | sed 's/^ *//')
+              [ -n "$L" ] || continue
+              if printf '%s\n' "$LABELS_NOW" | grep -qx "$L"; then
+                RECHECK_BLOCKED="$L"
+                break
+              fi
+            done <<EOF
+          $BLOCKING_LABELS
+          EOF
+            if [ -n "$RECHECK_BLOCKED" ]; then
+              echo "マージ直前に $RECHECK_BLOCKED が付いていた: スキップ"
+              continue
+            fi
+            # <<< pre-merge-recheck
+
+            # ── マージ（検証した HEAD SHA にピンする）──
+            # gh pr merge は「今の head」をマージするため、検証後に push されたコミットを
+            # そのまま取り込んでしまう（TOCTOU）。REST の merge に sha を渡すと head が
+            # 動いていた場合に 409 で拒否され、何もマージされない。その PR は次回の
+            # workflow_run / schedule で新しい head を最初から検証し直す。
+            if GH_TOKEN="$MERGE_TOKEN" gh api -X PUT "repos/$REPO/pulls/$N/merge" \
+                 -f sha="$HEAD_SHA" -f merge_method=squash >/dev/null; then
+              gh pr comment "$N" --repo "$REPO" --body "🤖 **auto-merged** — 根拠: \`agent-review:passed\` / 必須チェック green / 聖域パス非接触（rename 元パス含む） / \`AUTOMERGE_PAUSED\` 未設定。検証してマージした SHA: \`${HEAD_SHA}\`。判定ログ: ${RUN_URL}（条件と巻き戻し手順: docs/auto-merge.md）"
+              echo "マージ完了（sha=$HEAD_SHA）"
+            else
+              echo "::warning::PR #$N のマージに失敗（409=検証後に head が動いた／コンフリクト等）。次回イベントで再検証する"
+            fi
+          done
+          # <<< automerge-script

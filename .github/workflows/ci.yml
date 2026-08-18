@@ -74,6 +74,11 @@ jobs:
       - name: Run unit tests (Vitest)
         run: npm run test:run
 
+      # auto-merge workflow の安全不変条件（聖域判定・必須チェック名の一致・fail-closed）。
+      # npm のテスト体系の外にある素の sh スクリプトなので、ここで明示実行する。
+      - name: auto-merge workflow invariants
+        run: scripts/test-auto-merge-workflow.sh
+
   # Playwright E2E テスト（必要になったらコメントを外して有効化する）。
   # 前提: `npx playwright test` が動く設定 (playwright.config.ts) があること。
   # e2e-tests:

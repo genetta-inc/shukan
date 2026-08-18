@@ -1,0 +1,154 @@
+# ─────────────────────────────────────────────────────────────
+# revert-pr.yml — セーフティガード「ワンクリック巻き戻し」
+# （dev-workflow プラグイン templates/auto-merge/ から展開。auto-merge.yml とセットで使う）
+#
+# auto-merge で main に入った変更が壊れていたとき、主が GitHub UI（スマホ可）から
+# PR 番号を1つ入れるだけで **revert PR を生成する**ワークフロー。
+#
+# 設計上の要点:
+#   - **マージはしない**。生成するのは revert PR まで。巻き戻しの是非は人間の判断に残す
+#     （壊れたと思ったものが実は正しく、revert 自体が二次被害になりうるため）。
+#   - 生成した PR には `human-merge` を付ける。auto-merge ロボットが拾わない側に置く。
+#   - squash マージ（auto-merge の既定）は単一親コミットなので `-m 1` を付けてはならず、
+#     merge commit（親2つ以上）には `-m 1` が必須。親の数を見て自動で切り替える。
+#   - push / PR 作成は AUTOMERGE_PAT があればそれを使う（GITHUB_TOKEN で作った PR は
+#     CI が起動せず、巻き戻し内容の緑を確認できないため）。無ければ GITHUB_TOKEN に
+#     フォールバックする（緊急時に「PAT が無いから revert できない」を作らない。
+#     その場合 CI は動かないので PR 本文で警告する）。
+#
+# 運用手順の正本: docs/auto-merge.md
+# ─────────────────────────────────────────────────────────────
+name: Revert PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "巻き戻したいマージ済み PR の番号（例: 226）"
+        required: true
+        type: string
+      reason:
+        description: "巻き戻す理由（PR 本文に載る。任意）"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: revert-pr
+  cancel-in-progress: false
+
+jobs:
+  revert:
+    name: create revert PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate input
+        env:
+          PR_INPUT: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          case "$PR_INPUT" in
+            ''|*[!0-9]*) echo "::error::pr 入力が PR 番号ではありません: $PR_INPUT"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          # revert 対象のコミットに到達するため全履歴が要る
+          fetch-depth: 0
+          # PAT があれば push も PAT 名義にして CI を起動させる（無ければ GITHUB_TOKEN）
+          token: ${{ secrets.AUTOMERGE_PAT || github.token }}
+
+      - name: Create revert PR
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT || github.token }}
+          HAS_PAT: ${{ secrets.AUTOMERGE_PAT != '' }}
+          REPO: ${{ github.repository }}
+          PR_INPUT: ${{ inputs.pr }}
+          REASON: ${{ inputs.reason }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          # >>> revert-script（scripts/test-auto-merge-workflow.sh がこの範囲を抽出して検査する）
+          set -euo pipefail
+
+          N="$PR_INPUT"
+          REASON="${REASON:-}"
+
+          META=$(gh api "repos/$REPO/pulls/$N" --jq '[(.merged|tostring), (.merge_commit_sha // ""), .title] | @tsv')
+          MERGED=$(printf '%s' "$META" | cut -f1)
+          SHA=$(printf '%s' "$META" | cut -f2)
+          TITLE=$(printf '%s' "$META" | cut -f3)
+
+          if [ "$MERGED" != "true" ]; then
+            echo "::error::PR #$N はマージされていません（revert 対象になりません）"
+            exit 1
+          fi
+          if [ -z "$SHA" ]; then
+            echo "::error::PR #$N のマージコミット SHA を取得できませんでした"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin "$BASE_BRANCH" --depth=0 >/dev/null 2>&1 || git fetch origin "$BASE_BRANCH"
+          git checkout "$BASE_BRANCH"
+          git pull --ff-only origin "$BASE_BRANCH"
+
+          BRANCH="revert/pr-${N}-${RUN_ID}"
+          git checkout -b "$BRANCH"
+
+          # squash マージ（単一親）と merge commit（親2つ以上）で revert の指定が変わる
+          PARENT_COUNT=$(git rev-list --parents -n 1 "$SHA" | wc -w | tr -d ' ')
+          if [ "$PARENT_COUNT" -ge 3 ]; then
+            echo "merge commit として revert（-m 1）"
+            git revert --no-edit -m 1 "$SHA"
+          else
+            echo "単一親コミットとして revert"
+            git revert --no-edit "$SHA"
+          fi
+
+          git push origin "$BRANCH"
+
+          WARN=""
+          if [ "$HAS_PAT" != "true" ]; then
+            # shellcheck disable=SC2016  # バッククォートは markdown の記法で、変数展開は不要
+            WARN=$(printf '\n\n> ⚠️ `secrets.AUTOMERGE_PAT` が未設定のため GITHUB_TOKEN で作成しました。**この PR では CI が自動起動しません**（GitHub の再帰防止仕様）。空コミット push か手動 re-run で CI を回してからマージしてください。')
+          fi
+
+          BODY="軽量モード適用（理由: 機械生成の revert で、内容は対象 PR の逆適用のみ）。
+
+          ## 位置づけ
+          PR #${N}（${TITLE}）で main に入った変更を取り消します。
+
+          ## 動作確認ポイント
+          - [ ] CI の必須チェックが green
+          - [ ] 巻き戻し後に不具合の症状が消えることを確認
+
+          ## 実装メモ
+          - 対象コミット: \`${SHA}\`
+          - 生成元: ${RUN_URL}
+          - 巻き戻し理由: ${REASON:-（未記入）}
+          - この PR は auto-merge の対象外です（\`human-merge\` 付与）。マージ判断は人間が行います。${WARN}
+
+          Refs #${N}"
+
+          gh label create "human-merge" --repo "$REPO" \
+            --description "聖域パス（憲法・ワークフロー等）に触れるため auto-merge 対象外。人間がマージする" \
+            --color D93F0B >/dev/null 2>&1 || true
+
+          URL=$(gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" \
+            --title "revert: PR #${N} を巻き戻す" --body "$BODY")
+          echo "revert PR を作成しました: $URL"
+
+          NUM=$(printf '%s' "$URL" | sed 's|.*/||')
+          gh api "repos/$REPO/issues/$NUM/labels" -f "labels[]=human-merge" >/dev/null
+
+          gh pr comment "$N" --repo "$REPO" --body "↩️ この PR を巻き戻す revert PR を作成しました: ${URL}（生成: ${RUN_URL}）" || true
+          # <<< revert-script
