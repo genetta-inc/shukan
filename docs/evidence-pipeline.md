@@ -41,6 +41,33 @@ npm run validate:evidence
 npm test
 ```
 
+## 2.5 記事間の関係モデル（refines）と同系統の重複排除
+
+記事の詳細化（例: `daily_cardio` に対する `hiit`）は**別 articleId** になるため、#34 の
+articleId 単位 de-dup では二重計上を防げない。そこで記事間の親子関係を `refines` で表現する。
+
+- `LifeImpactArticle.refines?: string` — 詳細化元（親）の記事ID。**単一親のみ**（多重親は v1 では持たない）
+- 現行39記事は `refines` なし（フラット）。関係付けは新規追加時に判定する
+
+### 効果計算のルール（`src/lib/impact.ts::dedupeByLineage`）
+
+1. まず #34 の articleId 単位 de-dup（同一記事は最大ウェイトで1回だけ）を適用する
+2. 次に系統 de-dup: エビデンス集合内に `refines` チェーンで結ばれた**祖先–子孫が両方あれば、
+   詳細側（子孫）だけを計上**し、粗い側（祖先）を落とす。詳細記事のほうがユーザーの実態に
+   近い効果値を持つため。チェーンは推移的に辿る（孫・子・親が全部あれば孫のみ）
+3. **兄弟は両方計上する**（例: `hiit` と `jogging` が共に `daily_cardio` を refines する場合）。
+   別の実活動であり、v1 では正当な加算とみなす。過剰計上が観測されたら見直す
+
+習慣横断の集計（`calculateDedupedDailyImpact`）はこの2段 de-dup を通る。
+
+### 検証（`validate:evidence` に組込済み）
+
+| チェック | レベル | 内容 |
+|---|---|---|
+| `refines` 参照先の存在 | error | 参照先がレジストリに無い記事を弾く |
+| `refines` の循環 | error | チェーンの循環（自己参照含む）を弾く |
+| 親子の軸乖離 | warning | 親子で health/cost/income の非ゼロ軸集合が一致しない場合（詳細化なのに別物を指している疑い） |
+
 ## 3. 更新のしかた（新しいメタ分析が出たとき）
 
 既存記事の効果値を更新する場合:
