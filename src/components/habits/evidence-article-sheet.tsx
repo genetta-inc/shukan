@@ -89,14 +89,18 @@ export function EvidenceArticleSheet({
   const [commentSending, setCommentSending] = useState(false);
   const [showThanks, setShowThanks] = useState(false);
 
+  // onAuthStateChange は同一ユーザーでも毎回新しい user オブジェクト参照を返すため、
+  // 参照ではなくプリミティブな user.id を effect の依存にする（#79 / useHabits と同じパターン）。
+  const userId = user?.id;
+
   // Load feedback state when sheet opens (SCENARIO-AF-09)
   useEffect(() => {
-    if (!open || !articleId || !user) return;
+    if (!open || !articleId || !userId) return;
     setCalcExpanded(false);
     setCommentText('');
     setShowThanks(false);
-    getUserFeedback(user.id, articleId).then(({ hasBadMark: has }) => setHasBadMark(has));
-  }, [open, articleId, user]);
+    getUserFeedback(userId, articleId).then(({ hasBadMark: has }) => setHasBadMark(has));
+  }, [open, articleId, userId]);
 
   // Bad mark toggle (SCENARIO-AF-01, AF-02, AF-08)
   const handleBadMarkToggle = useCallback(async () => {
