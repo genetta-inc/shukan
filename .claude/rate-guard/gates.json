@@ -1,0 +1,12 @@
+{
+  "//": "rate-guard work-gate の配線（このリポジトリを cwd とする cron tick に効く）。仕様は flatmate 側 .claude/hooks/rate-guard.py のヘッダ参照。移植元: genetta-inc/flatmate（issue #106）。",
+  "gates": [
+    {
+      "job": "dev-cycle",
+      "prompt": "[tick] docs/agent-loop.md を読み",
+      "cmd": ["scripts/agent-loop-gate.sh"],
+      "timeout_sec": 45,
+      "max_silence_sec": 21600
+    }
+  ]
+}

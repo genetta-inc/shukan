@@ -37,7 +37,13 @@ yarn-error.log*
 .vercel
 
 # claude
-.claude/
+# 以前は `.claude/` を丸ごと ignore していたが、rate-guard work-gate の設定ファイル
+# `.claude/rate-guard/gates.json` はリポジトリに commit する必要があるため、
+# 個別ファイル/ディレクトリ単位の ignore に変更した（flatmate 本体と同じ方式。issue #106）。
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/context-guard/
+.claude/rate-guard/log.jsonl
 
 # superset (personal worktree tool config)
 .superset/
