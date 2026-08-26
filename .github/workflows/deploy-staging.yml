@@ -1,5 +1,6 @@
 name: Deploy to Staging
 
+# - runs-on は vars.CI_RUNNER で切替可能（未設定なら GitHub ホスト）。
 on:
   push:
     branches: [main]
@@ -17,7 +18,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to Staging
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 

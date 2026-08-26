@@ -22,11 +22,13 @@ env:
 # - pull_request: Draft 中は job 側 `draft == false` ガードで skip し、
 #   「Ready for review」ボタン（ready_for_review）で発火する
 # - workflow_dispatch: 手動トリガー
+#
+# - runs-on は vars.CI_RUNNER で切替可能（未設定なら GitHub ホスト）。
 
 jobs:
   actionlint:
     name: Actionlint
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +40,7 @@ jobs:
 
   lint-and-typecheck:
     name: Lint & Type Check & Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4

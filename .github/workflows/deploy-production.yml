@@ -1,5 +1,6 @@
 name: Deploy to Production
 
+# - runs-on は vars.CI_RUNNER で切替可能（未設定なら GitHub ホスト）。
 on:
   # 手動トリガーのみ（承認ゲート付き）
   workflow_dispatch:
@@ -29,7 +30,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to Production
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     # GitHub Environment "Production" で approval gate を設定
     environment:
       name: Production

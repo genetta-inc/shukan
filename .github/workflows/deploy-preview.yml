@@ -3,6 +3,8 @@ name: Deploy Preview
 # Preview は「明示的に要求されたときだけ」デプロイする opt-in 方式。
 # PR に `preview` ラベルを貼ると発火し、貼っている間は push のたびに更新される。
 # ラベルを剥がすと以降は何も走らない。Draft / Ready for review の状態は問わない。
+#
+# - runs-on は vars.CI_RUNNER で切替可能（未設定なら GitHub ホスト）。
 on:
   pull_request:
     types: [labeled, synchronize]
@@ -31,7 +33,7 @@ jobs:
         (github.event.action == 'labeled' && github.event.label.name == 'preview') ||
         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'preview'))
       )
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
