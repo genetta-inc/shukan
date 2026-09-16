@@ -11,7 +11,10 @@ tmp=$(mktemp "${TMPDIR:-/tmp}/pre-push-stdin.XXXXXX") || {
   echo "pre-push: 一時ファイルを作成できませんでした。ガードを検証できないため push を中止します" >&2
   exit 1
 }
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+# 後片付けと中止を分ける。EXIT だけで削除すると、シグナルで一時ファイルが消えた後も
+# 処理が続き、下の入力リダイレクトが失敗して保護ブランチ判定が素通りする。
+trap 'rm -f "$tmp"' 0
+trap 'exit 1' HUP INT TERM
 # 書き込みが失敗すると $tmp が空になり、保護ブランチ判定が素通りする（fail-open）。
 # ガードを検証できない状態なので push を止める。
 if ! cat > "$tmp"; then
@@ -29,7 +32,8 @@ while read -r _ _ remote_ref _ || [ -n "$remote_ref" ]; do
       exit 1
     fi
   done
-done < "$tmp"
+# 一時ファイルを開けなければ判定が 1 行も走らない。素通りさせずに止める。
+done < "$tmp" || exit 1
 
 # 委譲先を探す。git の優先順は local > global > system で、local / worktree スコープは
 # このフック自身を指すため除き、global → system の順で引く。
