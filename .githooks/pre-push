@@ -1,7 +1,13 @@
 #!/bin/sh
 # agent-loop policy: 保護ブランチへの直接 push を拒否する
+#
+# このフックは core.hooksPath=.githooks（リポジトリローカル設定）で有効になる。
+# core.hooksPath が指す 1 か所しか git は見ないため、グローバルのフック
+# （マージ済み PR のブランチへの push を拒否する）は末尾でこちらから呼ぶ。
+input=$(cat)
+
 protected="main master"
-while read local_ref local_sha remote_ref remote_sha; do
+while read -r _ _ remote_ref _; do
   for b in $protected; do
     if [ "$remote_ref" = "refs/heads/$b" ]; then
       echo "pre-push: $b への直接 push は agent-loop ポリシーで禁止されています" >&2
@@ -9,5 +15,15 @@ while read local_ref local_sha remote_ref remote_sha; do
       exit 1
     fi
   done
-done
+done <<EOF2
+$input
+EOF2
+
+# グローバルのフックへ同じ引数と stdin を渡す。未設定・自分自身を指す場合は呼ばない
+global_dir=$(git config --global --includes --type=path --get core.hooksPath 2>/dev/null)
+if [ -n "$global_dir" ] && [ -x "$global_dir/pre-push" ] &&
+   [ "$(cd "$global_dir" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$0")" && pwd -P)" ]; then
+  printf '%s\n' "$input" | "$global_dir/pre-push" "$@"
+  exit $?
+fi
 exit 0
