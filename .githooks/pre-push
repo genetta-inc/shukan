@@ -2,12 +2,21 @@
 # agent-loop policy: 保護ブランチへの直接 push を拒否する
 #
 # このフックは core.hooksPath=.githooks（リポジトリローカル設定）で有効になる。
-# core.hooksPath が指す 1 か所しか git は見ないため、グローバルのフック
+# core.hooksPath が指す 1 か所しか git は見ないため、リポジトリ外のフック
 # （マージ済み PR のブランチへの push を拒否する）は末尾でこちらから呼ぶ。
-input=$(cat)
+
+# stdin は委譲先へ原本どおり（バイト単位で）渡す必要がある。コマンド置換は末尾の
+# 改行を落としてしまうため、一時ファイルに落として両方の読み手がそこから読む。
+tmp=$(mktemp "${TMPDIR:-/tmp}/pre-push-stdin.XXXXXX") || {
+  echo "pre-push: 一時ファイルを作成できませんでした。ガードを検証できないため push を中止します" >&2
+  exit 1
+}
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+cat > "$tmp"
 
 protected="main master"
-while read -r _ _ remote_ref _; do
+# 末尾に改行の無い最終行も取りこぼさない（read は EOF で偽を返すが変数は設定済み）
+while read -r _ _ remote_ref _ || [ -n "$remote_ref" ]; do
   for b in $protected; do
     if [ "$remote_ref" = "refs/heads/$b" ]; then
       echo "pre-push: $b への直接 push は agent-loop ポリシーで禁止されています" >&2
@@ -15,15 +24,17 @@ while read -r _ _ remote_ref _; do
       exit 1
     fi
   done
-done <<EOF2
-$input
-EOF2
+done < "$tmp"
 
-# グローバルのフックへ同じ引数と stdin を渡す。未設定・自分自身を指す場合は呼ばない
-global_dir=$(git config --global --includes --type=path --get core.hooksPath 2>/dev/null)
-if [ -n "$global_dir" ] && [ -x "$global_dir/pre-push" ] &&
-   [ "$(cd "$global_dir" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$0")" && pwd -P)" ]; then
-  printf '%s\n' "$input" | "$global_dir/pre-push" "$@"
+# 委譲先を探す。git の優先順は local > global > system で、local / worktree スコープは
+# このフック自身を指すため除き、global → system の順で引く。
+hooks_dir=$(git config --global --includes --type=path --get core.hooksPath 2>/dev/null)
+[ -n "$hooks_dir" ] || hooks_dir=$(git config --system --includes --type=path --get core.hooksPath 2>/dev/null)
+
+# 委譲先へ同じ引数と stdin を渡す。未設定・自分自身を指す場合は呼ばない
+if [ -n "$hooks_dir" ] && [ -x "$hooks_dir/pre-push" ] &&
+   [ "$(cd "$hooks_dir" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$0")" && pwd -P)" ]; then
+  "$hooks_dir/pre-push" "$@" < "$tmp"
   exit $?
 fi
 exit 0
