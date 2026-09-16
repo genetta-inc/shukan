@@ -6,7 +6,7 @@
 # （マージ済み PR のブランチへの push を拒否する）は末尾でこちらから呼ぶ。
 
 # stdin は委譲先へ原本どおり（バイト単位で）渡す必要がある。コマンド置換は末尾の
-# 改行を落としてしまうため、一時ファイルに落として両方の読み手がそこから読む。
+# 改行を落としてしまうため、一時ファイルに落とし、委譲先へはそのファイルを直接渡す。
 tmp=$(mktemp "${TMPDIR:-/tmp}/pre-push-stdin.XXXXXX") || {
   echo "pre-push: 一時ファイルを作成できませんでした。ガードを検証できないため push を中止します" >&2
   exit 1
@@ -22,16 +22,19 @@ if ! cat > "$tmp"; then
   exit 1
 fi
 
-# 判定に使う内容を先に読み切る。`done < "$tmp" ||` では open の失敗しか拾えず、
-# open 後の read エラー（$tmp がディレクトリ等）はループの終了ステータスに乗らない
-# （while は本体が 1 度も走らなければ 0 を返す）ため、保護ブランチ判定を素通りする。
+# 判定に使う内容は先に読み切る。`while ... done < "$tmp" || …` の形では、open に成功した
+# あとの read エラーを拾えない（ループ本体が 1 度も実行されなければ while は 0 を返すため、
+# read が初回で失敗しても || が発火せず素通りする）。cat なら読み取り失敗が終了ステータスに出る。
 refs=$(cat "$tmp") || {
+  # $tmp を読めない＝保護ブランチ判定を行えていない。素通りさせない。
   echo "pre-push: push 対象の一覧を読み取れませんでした。ガードを検証できないため push を中止します" >&2
   exit 1
 }
 
 protected="main master"
 # 末尾に改行の無い最終行も取りこぼさない（read は EOF で偽を返すが変数は設定済み）
+# ヒアドキュメントで渡すのは、`printf | while` にするとループがサブシェルに入り、
+# 中の exit 1 がフック本体を終わらせなくなるため。
 while read -r _ _ remote_ref _ || [ -n "$remote_ref" ]; do
   for b in $protected; do
     if [ "$remote_ref" = "refs/heads/$b" ]; then
@@ -40,8 +43,6 @@ while read -r _ _ remote_ref _ || [ -n "$remote_ref" ]; do
       exit 1
     fi
   done
-# ヒアドキュメントで渡す。`printf | while` だとループがサブシェルに入り、
-# 中の exit 1 がフック本体を終わらせられなくなる。
 done <<EOF
 $refs
 EOF
