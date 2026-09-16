@@ -12,7 +12,12 @@ tmp=$(mktemp "${TMPDIR:-/tmp}/pre-push-stdin.XXXXXX") || {
   exit 1
 }
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
-cat > "$tmp"
+# 書き込みが失敗すると $tmp が空になり、保護ブランチ判定が素通りする（fail-open）。
+# ガードを検証できない状態なので push を止める。
+if ! cat > "$tmp"; then
+  echo "pre-push: push 対象の一覧を保存できませんでした。ガードを検証できないため push を中止します" >&2
+  exit 1
+fi
 
 protected="main master"
 # 末尾に改行の無い最終行も取りこぼさない（read は EOF で偽を返すが変数は設定済み）
