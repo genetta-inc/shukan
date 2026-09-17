@@ -18,7 +18,6 @@
 | worktree 置き場 | `~/orca/workspaces/Shukan_ver.1.0` |
 | 朝ダイジェスト | 環境変数 `AGENT_DIGEST_HOUR`（デフォルト 7）時以降のその日最初のサイクル |
 | 提案ストック上限 | 3 件 |
-| Review Queue Project | oratta/6（`<owner>/<番号>` 形式。`なし` なら連携をスキップ） |
 
 ## 大原則（全モード共通・違反禁止）
 
@@ -57,61 +56,6 @@
 | `agent-review:pending` | PR | 実装済み・レビューエージェント待ち |
 | `agent-review:passed` | PR | レビュー合格。人間はマージ判断のみでよい |
 | `agent-review:failed` | PR | レビュー不合格。修正モードの対象 |
-
-## Review Queue 連携（プロジェクト横断レビューボード）
-
-Review Queue Project が `なし` 以外なら、**人間の対応を待っているもの**（PR と issue の両方）をユーザーレベルの
-GitHub Project に反映する。人間はこのボード1枚で全リポジトリの「マージ判断待ち PR」「トリアージ待ち issue」
-「隔離された issue」を横断で捌く。操作はすべて決定論的な `gh` コマンドで行う。
-
-`State`（単一選択フィールド）はラベルと1対1で対応させる。**ラベルを付け替えたら、同じ手順内で必ず State も揃える**:
-
-| 対象 | ラベル | State | 人間の対応 |
-|---|---|---|---|
-| PR | `agent-review:pending` | レビュー中 | 不要（ループが処理中） |
-| PR | `agent-review:failed` | 修正中 | 不要（ループが処理中） |
-| PR | `agent-review:passed` | マージ判断 | **マージするか判断** |
-| issue | `agent-proposed` / `needs-approval` | トリアージ | **実行を承認するか判断** |
-| issue | `agent-ready`（未着手） | 着手可能 | 不要（ループの実行待ち） |
-| issue | `agent-blocked` | 要介入 | **2回失敗の原因を判断** |
-
-**ボード上のドラッグが承認操作になる**: 人間が issue カードを トリアージ → 着手可能 へ動かすと、
-次サイクル冒頭の Step 0.8 がラベルを `agent-ready` に同期する。**issue の item は State（ボード）が正、
-PR の item はラベルが正**（PR の State はループだけが動かす）。
-
-`Blocked count`（数値フィールド）= その item が塞いでいる後続タスク数。人間が「どれから捌くか」を決める
-ソートキーになる（ボードは Blocked count 降順）。算出は **GitHub ネイティブの issue dependencies** を正とする:
-
-```bash
-# PR の場合: 対象 issue（Closes #<N> の N）が blocking している open issue 数
-# issue の場合: その issue 自身が blocking している open issue 数
-BLOCKED=$(gh api repos/<owner>/<repo>/issues/<N>/dependencies/blocking \
-  --jq '[.[] | select(.state == "open")] | length')
-```
-
-dependencies API がエラーの場合のフォールバック: `#<N>` を本文参照している open な `agent-ready` issue 数
-（`gh issue list --state open --label agent-ready --json number,body --jq '[.[] | select(.body | test("#<N>([^0-9]|$)"))] | length'`）。
-
-登録・更新の手順（`<owner>/<番号>` はプロジェクト設定の Review Queue Project の値）:
-
-```bash
-PROJECT_ID=$(gh project view <番号> --owner <owner> --format json --jq .id)
-# 登録（登録済み URL に対しては既存 item が返るため冪等）
-ITEM_ID=$(gh project item-add <番号> --owner <owner> --url <PR/issueのURL> --format json --jq .id)
-# field id / option id を取得してから書き込む
-gh project field-list <番号> --owner <owner> --format json
-gh project item-edit --project-id $PROJECT_ID --id $ITEM_ID \
-  --field-id <State_の_field_id> --single-select-option-id <対応する_option_id>
-gh project item-edit --project-id $PROJECT_ID --id $ITEM_ID \
-  --field-id <Blocked_count_の_field_id> --number $BLOCKED
-```
-
-- **item の削除**: 人間の対応が済んで待ちが解消した issue（トリアージ済みで `agent-ready` に昇格した、
-  または `agent-blocked` が解除された）は、ループが着手する時点（Step 3 の着手宣言時）に
-  `gh project item-delete <番号> --owner <owner> --id $ITEM_ID` でボードから外す。
-- **連携の失敗でサイクルを止めない**: `gh project` / dependencies 系コマンドがエラーになっても警告として
-  報告するだけにとどめ、本来の仕事（実装・レビュー・修正）は完了させる。
-- マージ・クローズされた PR / issue の後片付けは Project 側の built-in workflow（auto-archive）に任せる。
 
 ## 状態機械
 
@@ -167,19 +111,6 @@ Step 0 と 0.5 は毎サイクル評価する。Step 1〜4 は**上から順に�
 
 「その日最初」の判定は `.agent-loop/log.md` の最終行の日付が今日より前かどうかで行う。
 
-### Step 0.8: Review Queue ボード同期（連携時のみ・毎サイクル）
-
-Project にはフィールド変更のリアルタイム通知が無いため、人間のドラッグ操作を毎サイクル冒頭でラベルへ反映する。
-
-1. `gh project item-list <番号> --owner <owner> --format json` から**このリポジトリの issue item** を抽出する。
-2. State とラベルの食い違いを **State に合わせて**解消する:
-   - State=着手可能 なのに `agent-proposed` / `needs-approval` / `agent-blocked` が付いている →
-     それらを外して `agent-ready` を付け、issue に「Review Queue ボードから承認」とコメントする。
-   - State=トリアージ なのに `agent-ready` が付いている → `agent-ready` を外して `agent-proposed` を付ける（承認の取り消し）。
-3. 逆方向の反映: このリポジトリの open な `agent-ready` issue（`agent-wip` 無し）でボード未登録のものを
-   State=着手可能 で登録する（着手可能列 = 実行待ちキューの一覧を常に完全に保つ）。
-4. 同期の失敗はサイクルを止めない（警告のみ報告して次の Step へ進む）。
-
 ### Step 1: レビューモード — `agent-review:pending` の PR がある
 
 `gh pr list --label "agent-review:pending" --state open` で最も古い1件を選ぶ。
@@ -194,40 +125,39 @@ Project にはフィールド変更のリアルタイム通知が無いため、
 6. 判定を PR コメントに書き、ラベルを付け替える:
    - 合格 → `agent-review:passed`（検証ログ・実機確認の内容を添える）
    - 不合格 → `agent-review:failed`（欠陥の再現手順と修正すべき点を具体的に書く）
-7. Review Queue 連携（該当時）: 付け替え後のラベルに合わせて State を更新し、Blocked count を再計算する（「Review Queue 連携」参照）。
-8. 更新したブランチは push する（feature ブランチへの push は許可されている）。
+7. 更新したブランチは push する（feature ブランチへの push は許可されている）。
 
 ### Step 1.5: passed の鮮度チェック
 
-`agent-review:passed` の PR のうち、`origin/main` との間でコンフリクトが発生しているものがあれば、`agent-review:pending` に戻して次サイクル以降で再レビューさせる（Review Queue 連携時は State も レビュー中 に戻す）。これにより「passed = 今すぐコンフリクトなしでマージでき、直近の main で動作確認済み」が常に保たれる。
+`agent-review:passed` の PR のうち、`origin/main` との間でコンフリクトが発生しているものがあれば、`agent-review:pending` に戻して次サイクル以降で再レビューさせる。これにより「passed = 今すぐコンフリクトなしでマージでき、直近の main で動作確認済み」が常に保たれる。
 
 ### Step 2: 修正モード — `agent-review:failed` の PR がある
 
 最も古い1件を選び、PR ブランチの worktree でレビューコメントの指摘を修正する。
 
 1. 修正後、`npm run test:run` / `npm run lint` を実行し、証拠をターン内に表示する。
-2. push して PR コメントに対応内容を書き、`agent-review:pending` に戻す（Review Queue 連携時は State も レビュー中 に戻す）。
-3. 同一 PR で failed が2回付いたら、それ以上触らず PR コメントに経緯をまとめ、元 issue を `agent-blocked` にして人間へ引き渡す（Review Queue 連携時は元 issue を State=要介入 で登録し、PR の item は削除する）。
+2. push して PR コメントに対応内容を書き、`agent-review:pending` に戻す。
+3. 同一 PR で failed が2回付いたら、それ以上触らず PR コメントに経緯をまとめ、元 issue を `agent-blocked` にして人間へ引き渡す。
 
 ### Step 3: 実装モード — 実行可能な issue がある
 
 **実行可能な issue** = open かつ `agent-ready` 付き、かつ `agent-wip` / `agent-blocked` / `size:large` が付いていないもの。念のため、open な PR が既に紐づいている issue も除外する（`gh pr list --search "<番号> in:body"` 等で確認）。さらに、ネイティブの依存関係で **open な issue にブロックされているものは拾わない**（`gh api repos/<owner>/<repo>/issues/<番号>/dependencies/blocked_by --jq '[.[] | select(.state == "open")] | length'` が 0 でないもの。ブロッカー側を先に片付ける）。最も番号の小さい1件を選ぶ。
 
 1. 受け入れ条件が測定可能な形で書かれていない issue は拾わない。不足点を issue コメントで指摘し、次の候補へ（候補が尽きたら Step 4 へ）。
-2. 着手宣言: `agent-wip` ラベルを付け、着手コメントを残す。Review Queue 連携（該当時）: この issue がボードに載っていれば（着手可能 など）item を削除する（着手した issue は実行待ちキューから消す）。
+2. 着手宣言: `agent-wip` ラベルを付け、着手コメントを残す。
 3. `~/orca/workspaces/Shukan_ver.1.0` 配下に worktree を作成する（ブランチ名: `agent/issue-<番号>-<slug>`、起点は `origin/main`）。wt-setup スキルが使えるなら使う。
 4. 受け入れ条件を仕様として実装する。テストを先に書く（大原則 6・7 を遵守）。
 5. `npm run test:run` / `npm run lint` / `npm run build` を実行し、証拠をターン内に表示する。
-6. 通ったら push して **Draft PR** を作成する。本文は loops プラグインの `references/pr-body-format.md` の型（5 セクション + `Closes #<番号>` + 検証ログの折りたたみ。小変更は軽量モード可）に従って書き、`agent-review:pending` ラベルを付ける。Review Queue 連携（該当時）: PR を Project に登録し、State を レビュー中 に、Blocked count を算出して設定する（「Review Queue 連携」参照）。
+6. 通ったら push して **Draft PR** を作成する。本文は loops プラグインの `references/pr-body-format.md` の型（5 セクション + `Closes #<番号>` + 検証ログの折りたたみ。小変更は軽量モード可）に従って書き、`agent-review:pending` ラベルを付ける。
 7. issue に PR の URL と要約をコメントし、`agent-wip` と **`agent-ready` の両方を外す**（PR が open な間に別サイクルが同じ issue を再実装しないため。マージされれば `Closes` で自動クローズされ、PR がマージされずクローズされた場合は人間が再トリアージして `agent-ready` を付け直す）。
-8. 行き詰まったら: worktree は残し、issue に失敗ログをコメントする。同一 issue の失敗コメントが2件になったら `agent-blocked` に切り替えて以後拾わない（Review Queue 連携時は State=要介入 で登録する）。教訓を `.agent-loop/GUARDRAILS.md` に追記する（大原則 4 のミラーも忘れずに）。
+8. 行き詰まったら: worktree は残し、issue に失敗ログをコメントする。同一 issue の失敗コメントが2件になったら `agent-blocked` に切り替えて以後拾わない。教訓を `.agent-loop/GUARDRAILS.md` に追記する（大原則 4 のミラーも忘れずに）。
 
 途中で `size:large` 相当（1サイクルで完結しない規模）と判明したら、着手を中止して issue に分割案をコメントし、`size:large` を付けて終了する。
 
 ### Step 4: 提案モード — 上記のどれにも該当しない
 
 1. open な `agent-proposed` の件数を数える。**3 件以上あれば新規起票せず**、その旨を実行ログに残して終了する（チャンネルへは投稿しない。承認待ちを溜めてラバースタンプ化させないため。未トリアージ提案の存在自体は朝ダイジェストの pending リストで主に届く）。
-2. 上限未満なら、コードベース・既存 issue・`.agent-loop/GUARDRAILS.md`・直近のログを調査し、価値のあるタスク案を**最大2件**、`agent-proposed` ラベルで起票する。各案には測定可能な受け入れ条件と、触るファイル・関数の見当を必ず書く。既存 issue との依存関係が明確なら、ネイティブの dependencies も張る（`gh api -X POST repos/<owner>/<repo>/issues/<後続>/dependencies/blocked_by -F issue_id=<前提のissue id>`）。Review Queue 連携（該当時）: 起票した issue を State=トリアージ で登録し、Blocked count を設定する。
+2. 上限未満なら、コードベース・既存 issue・`.agent-loop/GUARDRAILS.md`・直近のログを調査し、価値のあるタスク案を**最大2件**、`agent-proposed` ラベルで起票する。各案には測定可能な受け入れ条件と、触るファイル・関数の見当を必ず書く。既存 issue との依存関係が明確なら、ネイティブの dependencies も張る（`gh api -X POST repos/<owner>/<repo>/issues/<後続>/dependencies/blocked_by -F issue_id=<前提のissue id>`）。
 3. **起票のみで終了する。実行しない。** 人間が `agent-ready` に昇格させるまで待つ。
 
 ## 実行ログ形式（.agent-loop/log.md）
