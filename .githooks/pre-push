@@ -1,7 +1,41 @@
 #!/bin/sh
 # agent-loop policy: 保護ブランチへの直接 push を拒否する
+#
+# このフックは core.hooksPath=.githooks（リポジトリローカル設定）で有効になる。
+# core.hooksPath が指す 1 か所しか git は見ないため、リポジトリ外のフック
+# （マージ済み PR のブランチへの push を拒否する）は末尾でこちらから呼ぶ。
+
+# stdin は委譲先へ原本どおり（バイト単位で）渡す必要がある。コマンド置換は末尾の
+# 改行を落としてしまうため、一時ファイルに落とし、委譲先へはそのファイルを直接渡す。
+tmp=$(mktemp "${TMPDIR:-/tmp}/pre-push-stdin.XXXXXX") || {
+  echo "pre-push: 一時ファイルを作成できませんでした。ガードを検証できないため push を中止します" >&2
+  exit 1
+}
+# シグナルで中断されたとき、削除だけして後続へ進むと $tmp を読めないまま
+# 保護ブランチ判定を飛ばしてしまう。片付けは EXIT に任せ、シグナルでは終了する。
+trap 'rm -f "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+# 書き込みが失敗すると $tmp が空になり、保護ブランチ判定が素通りする（fail-open）。
+# ガードを検証できない状態なので push を止める。
+if ! cat > "$tmp"; then
+  echo "pre-push: push 対象の一覧を保存できませんでした。ガードを検証できないため push を中止します" >&2
+  exit 1
+fi
+
+# 判定に使う内容は先に読み切る。`while ... done < "$tmp" || …` の形では、open に成功した
+# あとの read エラーを拾えない（ループ本体が 1 度も実行されなければ while は 0 を返すため、
+# read が初回で失敗しても || が発火せず素通りする）。cat なら読み取り失敗が終了ステータスに出る。
+refs=$(cat "$tmp") || {
+  # $tmp を読めない＝保護ブランチ判定を行えていない。素通りさせない。
+  echo "pre-push: push 対象の一覧を読み取れませんでした。ガードを検証できないため push を中止します" >&2
+  exit 1
+}
+
 protected="main master"
-while read local_ref local_sha remote_ref remote_sha; do
+# 末尾に改行の無い最終行も取りこぼさない（read は EOF で偽を返すが変数は設定済み）
+# ヒアドキュメントで渡すのは、`printf | while` にするとループがサブシェルに入り、
+# 中の exit 1 がフック本体を終わらせなくなるため。
+while read -r _ _ remote_ref _ || [ -n "$remote_ref" ]; do
   for b in $protected; do
     if [ "$remote_ref" = "refs/heads/$b" ]; then
       echo "pre-push: $b への直接 push は agent-loop ポリシーで禁止されています" >&2
@@ -9,5 +43,19 @@ while read local_ref local_sha remote_ref remote_sha; do
       exit 1
     fi
   done
-done
+done <<EOF
+$refs
+EOF
+
+# 委譲先を探す。git の優先順は local > global > system で、local / worktree スコープは
+# このフック自身を指すため除き、global → system の順で引く。
+hooks_dir=$(git config --global --includes --type=path --get core.hooksPath 2>/dev/null)
+[ -n "$hooks_dir" ] || hooks_dir=$(git config --system --includes --type=path --get core.hooksPath 2>/dev/null)
+
+# 委譲先へ同じ引数と stdin を渡す。未設定・自分自身を指す場合は呼ばない
+if [ -n "$hooks_dir" ] && [ -x "$hooks_dir/pre-push" ] &&
+   [ "$(cd "$hooks_dir" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$0")" && pwd -P)" ]; then
+  "$hooks_dir/pre-push" "$@" < "$tmp"
+  exit $?
+fi
 exit 0
