@@ -260,6 +260,94 @@ function checkPresetArticleReferences(findings: Finding[]): void {
   }
 }
 
+// ── refines（記事間の詳細化関係）の整合チェック（issue #92）──────────────────
+//
+// checkRefinesIntegrity はレジストリに依存しない純粋関数として公開し、テストから
+// フィクスチャで直接検証できるようにしている（現行コーパスは refines なしのため、
+// レジストリ経由では error/warning ケースを再現できない）。
+
+/** refines チェックに必要な最小の記事形。LifeImpactArticle を包含する。 */
+export type RefinesCheckArticle = Pick<LifeImpactArticle, 'refines' | 'calculationParams'>;
+
+/** health/cost/income のうち非ゼロの軸集合（詳細化の妥当性判定に使う）。 */
+function nonZeroAxes(a: RefinesCheckArticle): string[] {
+  const axes: { name: string; v: number }[] = [
+    { name: 'health', v: a.calculationParams.dailyHealthMinutes },
+    { name: 'cost', v: a.calculationParams.dailyCostSaving },
+    { name: 'income', v: a.calculationParams.dailyIncomeGain },
+  ];
+  return axes.filter((x) => x.v !== 0).map((x) => x.name);
+}
+
+/**
+ * refines の整合チェック:
+ *   - 参照先がレジストリ（articles のキー）に存在すること（error: refines-unknown）
+ *   - refines チェーンに循環がないこと（error: refines-cycle。自己参照も循環）
+ *   - 親子で health/cost/income の非ゼロ軸集合が一致しない場合は warning
+ *     （refines-axis-mismatch。詳細化なのに別物を指している疑い）
+ */
+export function checkRefinesIntegrity(
+  articles: Readonly<Record<string, RefinesCheckArticle>>
+): Finding[] {
+  const findings: Finding[] = [];
+
+  for (const [id, a] of Object.entries(articles)) {
+    const parentId = a.refines;
+    if (parentId === undefined) continue;
+
+    const parent = articles[parentId];
+    if (!parent) {
+      push(findings, {
+        level: 'error',
+        code: 'refines-unknown',
+        article: id,
+        message: `refines='${parentId}' がレジストリに存在しない`,
+      });
+      continue;
+    }
+
+    // 循環検出: id から refines チェーンを辿り、id 自身に戻ったら循環。
+    const visited = new Set<string>([id]);
+    let cur: string | undefined = parentId;
+    while (cur !== undefined) {
+      if (visited.has(cur)) {
+        push(findings, {
+          level: 'error',
+          code: 'refines-cycle',
+          article: id,
+          message: `refines チェーンに循環がある（${[...visited, cur].join(' → ')}）`,
+        });
+        break;
+      }
+      visited.add(cur);
+      cur = articles[cur]?.refines;
+    }
+
+    // 軸乖離（直接の親子で比較）。
+    const childAxes = nonZeroAxes(a);
+    const parentAxes = nonZeroAxes(parent);
+    const same =
+      childAxes.length === parentAxes.length && childAxes.every((x) => parentAxes.includes(x));
+    if (!same) {
+      push(findings, {
+        level: 'warning',
+        code: 'refines-axis-mismatch',
+        article: id,
+        message: `refines 先 '${parentId}' と非ゼロ軸が乖離（子: [${childAxes.join(',')}] / 親: [${parentAxes.join(',')}]）。詳細化なのに別物を指していないか要確認`,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/** レジストリ全記事に対して refines 整合チェックを実行する（validateEvidence 用）。 */
+function checkRefines(findings: Finding[]): void {
+  const articles: Record<string, RefinesCheckArticle> = {};
+  for (const id of VALID_ARTICLE_IDS) articles[id] = getArticle(id)!;
+  for (const f of checkRefinesIntegrity(articles)) push(findings, f);
+}
+
 /** http/https の整った URL かを判定する。 */
 export function isWellFormedHttpUrl(url: string): boolean {
   try {
@@ -278,6 +366,7 @@ export function validateEvidence(): Finding[] {
   checkCalculationLogicConsistency(findings);
   checkIncomeDayBasis(findings);
   checkPresetArticleReferences(findings);
+  checkRefines(findings);
   return findings;
 }
 

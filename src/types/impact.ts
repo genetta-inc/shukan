@@ -31,6 +31,13 @@ export interface LifeImpactArticle {
   habitCategory: string;
   habitName: string;
 
+  // 詳細化の親記事ID（issue #92: 記事間の関係モデル）。単一親のみ（多重親は v1 では持たない）。
+  // 例: `hiit` は `daily_cardio` の詳細化なので refines: 'daily_cardio'。
+  // 効果計算では祖先–子孫が同一ユーザーに両方紐付いた場合、詳細側（子孫）だけを計上する
+  // （src/lib/impact.ts::dedupeByLineage）。兄弟（同じ親を refines する記事同士）は両方計上する。
+  // habitCategory と同じ理由で string 型（参照先の実在・循環なしは validate-evidence がチェック）。
+  refines?: string;
+
   // ヒーロー画像（任意）。未設定の記事は各コンポーネント側の既定グラデーションにフォールバックする。
   heroImage?: HeroImage;
 
