@@ -63,3 +63,7 @@ openspec/config.yaml
 
 # agent-loop 状態ファイル（git 管理外）
 .agent-loop/
+
+# Codex のローカル設定とスキルの複製（.claude/ と同じく git 管理外）
+.agents/
+.codex/
